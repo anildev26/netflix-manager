@@ -258,6 +258,26 @@
     .d-bad  { color: #f87171; font-weight: 600; }
 
     /* ════════════════════════════
+       DEMO BADGE
+    ════════════════════════════ */
+    .demo-badge {
+      background: rgba(251,191,36,0.12);
+      border: 1px solid rgba(251,191,36,0.35);
+      color: #fbbf24;
+      border-radius: 20px;
+      padding: 4px 12px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      display: none;
+      align-items: center;
+      gap: 6px;
+    }
+    .demo-badge.visible { display: flex; }
+
+    .masked { color: #555; letter-spacing: 2px; }
+
+    /* ════════════════════════════
        ACTION BUTTONS
     ════════════════════════════ */
     .ab {
@@ -425,7 +445,8 @@
   <nav class="app-nav">
     <div class="nav-brand">&#9654; Netflix Manager</div>
     <div class="d-flex align-items-center gap-3">
-      <span style="color:var(--muted); font-size:0.8rem;">Admin</span>
+      <span class="demo-badge" id="demo-badge">&#128065; Demo Mode</span>
+      <span id="nav-role-label" style="color:var(--muted); font-size:0.8rem;">Admin</span>
       <button class="btn btn-sm btn-outline-secondary" style="border-color:var(--border); color:var(--muted);" onclick="logout()">
         <i class="bi bi-box-arrow-right"></i> Logout
       </button>
@@ -484,7 +505,7 @@
         <button class="f-tab" onclick="setFilter('expired',this)">Expired</button>
       </div>
       <input type="text" class="search-box" id="search" placeholder="&#128269;  Search name or phone…" oninput="renderTable()" />
-      <button class="btn-red ms-auto" onclick="openAdd()">
+      <button class="btn-red ms-auto" id="add-btn" onclick="openAdd()">
         <i class="bi bi-plus-lg"></i> Add Customer
       </button>
     </div>
@@ -606,10 +627,11 @@
 /* ════════════════════════════════════════════
    STATE
 ════════════════════════════════════════════ */
-let customers   = [];
-let curFilter   = 'all';
+let customers    = [];
+let curFilter    = 'all';
 let custModal, delModal;
 let pendingDelId = null;
+let IS_DEMO      = false;   // true when logged in as test user
 
 /* ════════════════════════════════════════════
    INIT
@@ -623,6 +645,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('del-confirm').addEventListener('click', confirmDelete);
 
   if (localStorage.getItem('nf_token')) {
+    // Restore demo state from stored JWT without a round-trip to the server
+    try {
+      const payload = JSON.parse(atob(localStorage.getItem('nf_token').split('.')[1]));
+      IS_DEMO = (payload.role === 'test');
+    } catch (_) { IS_DEMO = false; }
     showApp();
     loadCustomers();
   }
@@ -659,11 +686,12 @@ async function handleLogin(e) {
   btn.disabled = true;
 
   try {
-    const { token } = await api('POST', '/api/login', {
+    const resp = await api('POST', '/api/login', {
       username: document.getElementById('lu').value,
       password: document.getElementById('lp').value,
     });
-    localStorage.setItem('nf_token', token);
+    localStorage.setItem('nf_token', resp.token);
+    IS_DEMO = (resp.role === 'test');
     showApp();
     loadCustomers();
   } catch (ex) {
@@ -677,6 +705,7 @@ async function handleLogin(e) {
 
 function logout() {
   localStorage.removeItem('nf_token');
+  IS_DEMO = false;
   document.getElementById('app').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('lp').value = '';
@@ -685,6 +714,11 @@ function logout() {
 function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
+
+  // Navbar & controls
+  document.getElementById('demo-badge').classList.toggle('visible', IS_DEMO);
+  document.getElementById('nav-role-label').textContent = IS_DEMO ? 'Demo' : 'Admin';
+  document.getElementById('add-btn').style.display = IS_DEMO ? 'none' : '';
 }
 
 /* ════════════════════════════════════════════
@@ -754,29 +788,37 @@ function renderTable() {
     return;
   }
 
-  tbody.innerHTML = list.map((c, i) => `
+  tbody.innerHTML = list.map((c, i) => {
+    const phoneCell  = IS_DEMO
+      ? `<span class="masked">&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;</span>`
+      : x(c.phone);
+    const amountCell = IS_DEMO
+      ? `<span class="masked">&#9679;&#9679;&#9679;&#9679;</span>`
+      : `&#8377;${fmt(c.monthly_amount)}`;
+    const actions = IS_DEMO
+      ? `<span style="color:var(--muted); font-size:0.75rem;">View only</span>`
+      : `<div class="d-flex gap-1">
+          <button class="ab ab-edit" title="Edit customer"              onclick="openEdit(${c.id})"><i class="bi bi-pencil-fill"></i></button>
+          <button class="ab ab-paid" title="Mark as Paid — renews +1 month" onclick="markPaid(${c.id})"><i class="bi bi-check-lg"></i></button>
+          <button class="ab ab-wa"   title="Send WhatsApp reminder"     onclick="sendWA(${c.id})"><i class="bi bi-whatsapp"></i></button>
+          <button class="ab ab-del"  title="Delete customer"            onclick="openDel(${c.id}, '${x(c.name)}')"><i class="bi bi-trash-fill"></i></button>
+        </div>`;
+    return `
     <tr>
       <td style="color:var(--muted);">${i + 1}</td>
       <td><strong>${x(c.name)}</strong></td>
-      <td style="color:var(--muted);">${x(c.phone)}</td>
+      <td style="color:var(--muted);">${phoneCell}</td>
       <td>${x(c.account)}</td>
       <td>${x(c.profile_name)}</td>
-      <td>&#8377;${fmt(c.monthly_amount)}</td>
+      <td>${amountCell}</td>
       <td style="color:var(--muted);">${fmtDate(c.start_date)}</td>
       <td>${fmtDate(c.expiry_date)}</td>
       <td class="${daysClass(c.days_left)}">${daysLabel(c.days_left)}</td>
       <td>${statusBadge(c.status)}</td>
       <td>${payBadge(c.payment_status)}</td>
-      <td>
-        <div class="d-flex gap-1">
-          <button class="ab ab-edit"  title="Edit customer"              onclick="openEdit(${c.id})"><i class="bi bi-pencil-fill"></i></button>
-          <button class="ab ab-paid"  title="Mark as Paid — renews +1 month" onclick="markPaid(${c.id})"><i class="bi bi-check-lg"></i></button>
-          <button class="ab ab-wa"    title="Send WhatsApp reminder"     onclick="sendWA(${c.id})"><i class="bi bi-whatsapp"></i></button>
-          <button class="ab ab-del"   title="Delete customer"            onclick="openDel(${c.id}, '${x(c.name)}')"><i class="bi bi-trash-fill"></i></button>
-        </div>
-      </td>
-    </tr>
-  `).join('');
+      <td>${actions}</td>
+    </tr>`;
+  }).join('');
 }
 
 /* ════════════════════════════════════════════

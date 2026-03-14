@@ -11,10 +11,14 @@ import jwt
 
 app = Flask(__name__, static_folder="public")
 
-DB_PATH       = os.environ.get("DB_PATH", "netflix.db")
-JWT_SECRET    = os.environ.get("JWT_SECRET", "change-this-secret-in-production-32chars+")
-ADMIN_USER    = os.environ.get("ADMIN_USERNAME", "admin")
-ADMIN_PASS    = os.environ.get("ADMIN_PASSWORD", "admin123")
+DB_PATH    = os.environ.get("DB_PATH", "netflix.db")
+JWT_SECRET = os.environ.get("JWT_SECRET", "change-this-secret-in-production-32chars+")
+
+ADMIN_USER = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASS = os.environ.get("ADMIN_PASSWORD", "admin123")
+
+TEST_USER  = os.environ.get("TEST_USERNAME", "test")
+TEST_PASS  = os.environ.get("TEST_PASSWORD", "Test@Admin123")
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 
@@ -77,21 +81,52 @@ def compute_customer(row) -> dict:
 
     return c
 
-# ─── Auth middleware ───────────────────────────────────────────────────────────
+# ─── Auth helpers ─────────────────────────────────────────────────────────────
+
+def _decode_token():
+    """Decode the Bearer token from the current request. Returns payload dict or None."""
+    auth  = request.headers.get("Authorization", "")
+    token = auth.replace("Bearer ", "").strip()
+    if not token:
+        return None
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+
 
 def token_required(f):
+    """Allow any valid token (admin or test)."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        auth  = request.headers.get("Authorization", "")
-        token = auth.replace("Bearer ", "").strip()
-        if not token:
-            return jsonify({"error": "Authorization token required"}), 401
-        try:
-            jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        except jwt.ExpiredSignatureError:
-            return jsonify({"error": "Session expired — please log in again"}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({"error": "Invalid token"}), 401
+        payload = _decode_token()
+        if payload is None:
+            auth = request.headers.get("Authorization", "")
+            token = auth.replace("Bearer ", "").strip()
+            if not token:
+                return jsonify({"error": "Authorization token required"}), 401
+            # Try to give a more specific error
+            try:
+                jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+            except jwt.ExpiredSignatureError:
+                return jsonify({"error": "Session expired — please log in again"}), 401
+            except jwt.InvalidTokenError:
+                return jsonify({"error": "Invalid token"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
+def admin_required(f):
+    """Allow only admin role tokens — blocks test/demo users."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        payload = _decode_token()
+        if payload is None:
+            return jsonify({"error": "Authorization required"}), 401
+        if payload.get("role") != "admin":
+            return jsonify({"error": "Admin access required"}), 403
         return f(*args, **kwargs)
     return decorated
 
@@ -100,28 +135,48 @@ def token_required(f):
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json(silent=True) or {}
-    if data.get("username") == ADMIN_USER and data.get("password") == ADMIN_PASS:
-        token = jwt.encode(
-            {"sub": "admin", "exp": datetime.utcnow() + timedelta(days=7)},
-            JWT_SECRET,
-            algorithm="HS256",
-        )
-        return jsonify({"token": token})
-    return jsonify({"error": "Invalid username or password"}), 401
+    u    = data.get("username", "")
+    p    = data.get("password", "")
+
+    if u == ADMIN_USER and p == ADMIN_PASS:
+        role = "admin"
+    elif u == TEST_USER and p == TEST_PASS:
+        role = "test"
+    else:
+        return jsonify({"error": "Invalid username or password"}), 401
+
+    token = jwt.encode(
+        {"sub": u, "role": role, "exp": datetime.utcnow() + timedelta(days=7)},
+        JWT_SECRET,
+        algorithm="HS256",
+    )
+    return jsonify({"token": token, "role": role})
 
 # ─── Customer routes ──────────────────────────────────────────────────────────
 
 @app.route("/api/customers", methods=["GET"])
 @token_required
 def get_customers():
+    payload = _decode_token()
+    role    = payload.get("role", "admin") if payload else "admin"
+
     conn = get_db()
     rows = conn.execute("SELECT * FROM customers ORDER BY id").fetchall()
     conn.close()
-    return jsonify([compute_customer(r) for r in rows])
+
+    result = [compute_customer(r) for r in rows]
+
+    # Mask sensitive fields for test/demo users
+    if role == "test":
+        for c in result:
+            c["phone"]          = "●●●●●●●●●●"
+            c["monthly_amount"] = "●●●●"
+
+    return jsonify(result)
 
 
 @app.route("/api/customers", methods=["POST"])
-@token_required
+@admin_required
 def add_customer():
     data = request.get_json(silent=True) or {}
     required = ("name", "phone", "account", "profile_name", "monthly_amount", "start_date")
@@ -151,7 +206,7 @@ def add_customer():
 
 
 @app.route("/api/customers/<int:cid>", methods=["PUT"])
-@token_required
+@admin_required
 def update_customer(cid):
     data = request.get_json(silent=True) or {}
     conn = get_db()
@@ -180,7 +235,7 @@ def update_customer(cid):
 
 
 @app.route("/api/customers/<int:cid>", methods=["DELETE"])
-@token_required
+@admin_required
 def delete_customer(cid):
     conn = get_db()
     conn.execute("DELETE FROM customers WHERE id = ?", (cid,))
@@ -190,7 +245,7 @@ def delete_customer(cid):
 
 
 @app.route("/api/customers/<int:cid>/paid", methods=["POST"])
-@token_required
+@admin_required
 def mark_paid(cid):
     """Renew subscription: advance start_date by 1 month, reset payment status."""
     conn = get_db()
@@ -201,8 +256,8 @@ def mark_paid(cid):
 
     # If still active: push forward 1 month from current start.
     # If already expired: start fresh from today so they get a full month.
-    advanced   = add_one_month(date.fromisoformat(row["start_date"]))
-    new_start  = advanced if advanced >= date.today() else date.today()
+    advanced  = add_one_month(date.fromisoformat(row["start_date"]))
+    new_start = advanced if advanced >= date.today() else date.today()
     conn.execute(
         "UPDATE customers SET start_date=?, payment_status=? WHERE id=?",
         (new_start.isoformat(), "Payment pending", cid),
@@ -225,9 +280,10 @@ def serve(path):
 
 if __name__ == "__main__":
     init_db()
-    port = int(os.environ.get("PORT", 3000))
+    port  = int(os.environ.get("PORT", 3000))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     print(f"\n  Netflix Manager running at http://localhost:{port}")
-    print(f"  Admin username : {ADMIN_USER}")
+    print(f"  Admin : {ADMIN_USER}")
+    print(f"  Test  : {TEST_USER}")
     print(f"  Using custom JWT secret: {'YES' if JWT_SECRET != 'change-this-secret-in-production-32chars+' else 'NO (using default!)'}\n")
     app.run(host="0.0.0.0", port=port, debug=debug)
