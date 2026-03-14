@@ -227,5 +227,7 @@ if __name__ == "__main__":
     init_db()
     port = int(os.environ.get("PORT", 3000))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    print(f"\n  Netflix Manager running at http://localhost:{port}\n")
+    print(f"\n  Netflix Manager running at http://localhost:{port}")
+    print(f"  Admin username : {ADMIN_USER}")
+    print(f"  Using custom JWT secret: {'YES' if JWT_SECRET != 'change-this-secret-in-production-32chars+' else 'NO (using default!)'}\n")
     app.run(host="0.0.0.0", port=port, debug=debug)
