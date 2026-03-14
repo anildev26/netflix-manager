@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/ANIL/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/1fe4a082-6dd1-4359-acf9-f10fddc69f10/af52e3e4-fbb1-4aca-a8ba-da9523ec9d0c/skills/docx/**)",
+      "Bash(pandoc \"C:\\\\Users\\\\ANIL\\\\Downloads\\\\netflix_subscription_sheet_system.docx\" -o output.md)",
+      "Bash(python -c \":*)",
+      "Bash(npm --version)",
+      "Bash(python -c \"import flask; print\\(''flask ok''\\)\")",
+      "Bash(python -c \"import bottle; print\\(''bottle ok''\\)\")",
+      "Bash(pip install:*)",
+      "Bash(python -m pip install flask pyjwt)"
+    ]
+  }
+}
