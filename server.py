@@ -1,10 +1,12 @@
+import csv
+import io
 import os
 import sqlite3
 import calendar
 from datetime import date, datetime, timedelta
 from functools import wraps
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, Response
 import jwt
 
 # ─── App & config ─────────────────────────────────────────────────────────────
@@ -266,6 +268,108 @@ def mark_paid(cid):
     row = conn.execute("SELECT * FROM customers WHERE id = ?", (cid,)).fetchone()
     conn.close()
     return jsonify(compute_customer(row))
+
+# ─── Import / Export ──────────────────────────────────────────────────────────
+
+CSV_HEADERS = ["Name", "Phone", "Account", "Profile Name", "Monthly Amount", "Start Date", "Payment Status"]
+CSV_FIELDS  = ["name", "phone", "account", "profile_name", "monthly_amount", "start_date", "payment_status"]
+
+
+@app.route("/api/customers/export", methods=["GET"])
+@admin_required
+def export_customers():
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM customers ORDER BY id").fetchall()
+    conn.close()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(CSV_HEADERS)
+    for r in rows:
+        writer.writerow([r["name"], r["phone"], r["account"], r["profile_name"],
+                         r["monthly_amount"], r["start_date"], r["payment_status"]])
+
+    today = date.today().isoformat()
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=netflix_customers_{today}.csv"},
+    )
+
+
+@app.route("/api/customers/import", methods=["POST"])
+@admin_required
+def import_customers():
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "No file provided"}), 400
+
+    try:
+        content = file.read().decode("utf-8-sig")   # utf-8-sig strips Excel BOM
+        reader  = csv.DictReader(io.StringIO(content))
+    except Exception as e:
+        return jsonify({"error": f"Could not read file: {e}"}), 400
+
+    added  = 0
+    errors = []
+
+    conn = get_db()
+    try:
+        for row_num, raw in enumerate(reader, start=2):
+            # Normalize keys: strip whitespace, lower-case for flexible matching
+            row = {k.strip().lower(): v.strip() for k, v in raw.items() if k}
+
+            def get(*keys):
+                for k in keys:
+                    if k.lower() in row and row[k.lower()]:
+                        return row[k.lower()]
+                return ""
+
+            name           = get("name")
+            phone          = get("phone", "whatsapp")
+            account        = get("account", "netflix account")
+            profile_name   = get("profile name", "profile_name", "profile")
+            amount_raw     = get("monthly amount", "monthly_amount", "amount") or "0"
+            start_date_raw = get("start date", "start_date")
+            payment_status = get("payment status", "payment_status") or "Payment pending"
+
+            row_errors = []
+            if not name:           row_errors.append("Name is required")
+            if not phone:          row_errors.append("Phone is required")
+            if not account:        row_errors.append("Account is required")
+            if not profile_name:   row_errors.append("Profile Name is required")
+            if not start_date_raw: row_errors.append("Start Date is required")
+
+            try:
+                amount = float(amount_raw)
+            except ValueError:
+                row_errors.append(f"Invalid amount '{amount_raw}'")
+                amount = 0.0
+
+            if start_date_raw:
+                try:
+                    date.fromisoformat(start_date_raw)
+                except ValueError:
+                    row_errors.append(f"Invalid date '{start_date_raw}' — use YYYY-MM-DD")
+
+            if row_errors:
+                errors.append(f"Row {row_num}: {'; '.join(row_errors)}")
+                continue
+
+            conn.execute(
+                """INSERT INTO customers
+                       (name, phone, account, profile_name, monthly_amount, start_date, payment_status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (name, phone, account, profile_name, amount, start_date_raw, payment_status),
+            )
+            added += 1
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return jsonify({"added": added, "errors": errors})
+
 
 # ─── Serve frontend ────────────────────────────────────────────────────────────
 

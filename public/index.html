@@ -355,6 +355,33 @@
 
     .btn-red:hover { background: #c9070f; color: #fff; }
 
+    .btn-outline-csv {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 7px;
+      padding: 7px 14px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: border-color .15s, color .15s;
+      white-space: nowrap;
+    }
+    .btn-outline-csv:hover { border-color: #aaa; color: #fff; }
+
+    /* Import result banner */
+    #import-result {
+      margin: -8px 24px 8px;
+      border-radius: 8px;
+      padding: 14px 18px;
+      font-size: 0.875rem;
+      display: none;
+    }
+    #import-result.visible { display: block; }
+
     /* ════════════════════════════
        EMPTY STATE
     ════════════════════════════ */
@@ -505,10 +532,24 @@
         <button class="f-tab" onclick="setFilter('expired',this)">Expired</button>
       </div>
       <input type="text" class="search-box" id="search" placeholder="&#128269;  Search name or phone…" oninput="renderTable()" />
-      <button class="btn-red ms-auto" id="add-btn" onclick="openAdd()">
-        <i class="bi bi-plus-lg"></i> Add Customer
-      </button>
+
+      <!-- Admin-only action buttons (hidden in demo mode) -->
+      <div class="d-flex gap-2 ms-auto" id="admin-actions">
+        <button class="btn-outline-csv" onclick="exportCSV()" title="Download all customers as CSV">
+          <i class="bi bi-download"></i> Export
+        </button>
+        <label class="btn-outline-csv" for="csv-file-input" title="Import customers from CSV">
+          <i class="bi bi-upload"></i> Import
+        </label>
+        <input type="file" id="csv-file-input" accept=".csv" style="display:none" onchange="handleImport(this)" />
+        <button class="btn-red" id="add-btn" onclick="openAdd()">
+          <i class="bi bi-plus-lg"></i> Add Customer
+        </button>
+      </div>
     </div>
+
+    <!-- Import result banner (shown after import) -->
+    <div id="import-result"></div>
 
     <!-- Table -->
     <div class="table-wrap">
@@ -675,6 +716,95 @@ async function api(method, path, body) {
 }
 
 /* ════════════════════════════════════════════
+   EXPORT
+════════════════════════════════════════════ */
+async function exportCSV() {
+  try {
+    const token = localStorage.getItem('nf_token');
+    const res   = await fetch('/api/customers/export', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) { toast('Export failed', 'err'); return; }
+
+    const blob  = await res.blob();
+    const url   = URL.createObjectURL(blob);
+    const a     = document.createElement('a');
+    const today = new Date().toISOString().slice(0, 10);
+    a.href     = url;
+    a.download = `netflix_customers_${today}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast(`Exported ${customers.length} customer(s) ✓`, 'ok');
+  } catch (ex) {
+    toast('Export failed: ' + ex.message, 'err');
+  }
+}
+
+/* ════════════════════════════════════════════
+   IMPORT
+════════════════════════════════════════════ */
+function handleImport(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';   // reset so same file can be re-imported if needed
+  if (!file.name.toLowerCase().endsWith('.csv')) {
+    toast('Please select a .csv file', 'err'); return;
+  }
+  importCSV(file);
+}
+
+async function importCSV(file) {
+  const banner = document.getElementById('import-result');
+  banner.className = '';
+  banner.style.display = 'none';
+
+  toast('Importing…', 'inf');
+  try {
+    const token = localStorage.getItem('nf_token');
+    const form  = new FormData();
+    form.append('file', file);
+
+    const res  = await fetch('/api/customers/import', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+
+    // Reload fresh customer list
+    await loadCustomers();
+
+    // Build result banner
+    const hasErrors = data.errors && data.errors.length > 0;
+    const bgColor   = data.added > 0 && !hasErrors ? '#14532d' : (data.added > 0 ? '#713f12' : '#450a0a');
+    const icon      = data.added > 0 && !hasErrors ? '✅' : (data.added > 0 ? '⚠️' : '❌');
+
+    let html = `<strong>${icon} ${data.added} customer(s) imported successfully.</strong>`;
+    if (hasErrors) {
+      html += `<br><span style="opacity:.85">Skipped ${data.errors.length} row(s) with errors:</span>`;
+      html += `<ul style="margin:6px 0 0; padding-left:18px;">` +
+              data.errors.map(e => `<li>${e}</li>`).join('') + `</ul>`;
+    }
+
+    banner.innerHTML       = html;
+    banner.style.background = bgColor;
+    banner.style.border    = `1px solid ${hasErrors ? '#ca8a04' : (data.added > 0 ? '#16a34a' : '#dc2626')}`;
+    banner.style.color     = '#fff';
+    banner.style.borderRadius = '8px';
+    banner.style.display   = 'block';
+
+    // Auto-hide after 12 seconds
+    setTimeout(() => { banner.style.display = 'none'; }, 12000);
+
+  } catch (ex) {
+    toast('Import failed: ' + ex.message, 'err');
+  }
+}
+
+/* ════════════════════════════════════════════
    AUTH
 ════════════════════════════════════════════ */
 async function handleLogin(e) {
@@ -718,7 +848,7 @@ function showApp() {
   // Navbar & controls
   document.getElementById('demo-badge').classList.toggle('visible', IS_DEMO);
   document.getElementById('nav-role-label').textContent = IS_DEMO ? 'Demo' : 'Admin';
-  document.getElementById('add-btn').style.display = IS_DEMO ? 'none' : '';
+  document.getElementById('admin-actions').style.display = IS_DEMO ? 'none' : '';
 }
 
 /* ════════════════════════════════════════════
