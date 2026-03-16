@@ -531,7 +531,7 @@
         <button class="f-tab" onclick="setFilter('expiring',this)">Expiring Soon</button>
         <button class="f-tab" onclick="setFilter('expired',this)">Expired</button>
       </div>
-      <input type="text" class="search-box" id="search" placeholder="&#128269;  Search name or phone…" oninput="renderTable()" />
+      <input type="text" class="search-box" id="search" placeholder="&#128269;  Search name, phone or account…" oninput="renderTable()" />
 
       <!-- Admin-only action buttons (hidden in demo mode) -->
       <div class="d-flex gap-2 ms-auto" id="admin-actions">
@@ -900,7 +900,8 @@ function renderTable() {
 
   if (q) list = list.filter(c =>
     c.name.toLowerCase().includes(q) ||
-    c.phone.toLowerCase().includes(q)
+    c.phone.toLowerCase().includes(q) ||
+    c.account.toLowerCase().includes(q)
   );
 
   const tbody = document.getElementById('tbody');
