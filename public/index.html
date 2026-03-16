@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Netflix Manager</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
   <style>
@@ -48,19 +49,25 @@
     }
 
     .brand-logo {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 12px;
+    }
+
+    .brand-name {
       text-align: center;
-      font-size: 1.8rem;
+      font-size: 1.7rem;
       font-weight: 900;
-      letter-spacing: -1px;
-      color: var(--red);
-      margin-bottom: 8px;
+      letter-spacing: -0.5px;
+      color: var(--text);
+      margin-bottom: 6px;
     }
 
     .brand-sub {
       text-align: center;
-      font-size: 0.8rem;
+      font-size: 0.78rem;
       color: var(--muted);
-      letter-spacing: 2px;
+      letter-spacing: 2.5px;
       text-transform: uppercase;
       margin-bottom: 36px;
     }
@@ -81,10 +88,13 @@
     }
 
     .nav-brand {
-      font-size: 1.4rem;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 1.25rem;
       font-weight: 900;
       letter-spacing: -0.5px;
-      color: var(--red);
+      color: var(--text);
     }
 
     /* ════════════════════════════
@@ -443,7 +453,27 @@
 ════════════════════════════════════════════ -->
 <div id="login-screen">
   <div class="login-card">
-    <div class="brand-logo">&#9654; Netflix Manager</div>
+    <!-- Brand icon (monitor + N + active badge) -->
+    <div class="brand-logo">
+      <svg width="80" height="80" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">
+        <!-- Monitor body with red border glow -->
+        <rect x="3" y="5" width="66" height="46" rx="9" fill="#1a0000" stroke="#E50914" stroke-width="2.5"/>
+        <!-- Screen inner area -->
+        <rect x="9" y="11" width="54" height="34" rx="5" fill="#0a0a0a"/>
+        <!-- Netflix-style N letterform -->
+        <path d="M17 16 L17 39 L22.5 39 L22.5 27.5 L32.5 39 L38 39 L38 16 L32.5 16 L32.5 27.5 L22.5 16 Z" fill="#E50914"/>
+        <!-- Green "all active" badge with checkmark -->
+        <circle cx="51" cy="28" r="7" fill="#166534" stroke="#22c55e" stroke-width="1.5"/>
+        <path d="M47.5 28 L50 30.5 L54.5 24.5" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        <!-- Monitor stand neck -->
+        <rect x="30" y="51" width="12" height="5" rx="3" fill="#2d2d2d"/>
+        <!-- Stand base -->
+        <rect x="22" y="56" width="28" height="4" rx="2" fill="#2d2d2d"/>
+        <!-- Subtle red underline on stand base -->
+        <rect x="22" y="59" width="28" height="1" rx="0.5" fill="#E50914" opacity="0.5"/>
+      </svg>
+    </div>
+    <div class="brand-name">Netflix Manager</div>
     <div class="brand-sub">Admin Portal</div>
 
     <form id="login-form" autocomplete="off">
@@ -470,7 +500,17 @@
 
   <!-- Navbar -->
   <nav class="app-nav">
-    <div class="nav-brand">&#9654; Netflix Manager</div>
+    <div class="nav-brand">
+      <!-- Compact monitor icon for navbar -->
+      <svg width="32" height="32" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">
+        <rect x="3" y="5" width="66" height="46" rx="9" fill="#1a0000" stroke="#E50914" stroke-width="2.5"/>
+        <rect x="9" y="11" width="54" height="34" rx="5" fill="#0a0a0a"/>
+        <path d="M17 16 L17 39 L22.5 39 L22.5 27.5 L32.5 39 L38 39 L38 16 L32.5 16 L32.5 27.5 L22.5 16 Z" fill="#E50914"/>
+        <circle cx="51" cy="28" r="7" fill="#166534" stroke="#22c55e" stroke-width="1.5"/>
+        <path d="M47.5 28 L50 30.5 L54.5 24.5" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </svg>
+      Netflix Manager
+    </div>
     <div class="d-flex align-items-center gap-3">
       <span class="demo-badge" id="demo-badge">&#128065; Demo Mode</span>
       <span id="nav-role-label" style="color:var(--muted); font-size:0.8rem;">Admin</span>
