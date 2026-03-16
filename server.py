@@ -262,7 +262,7 @@ def mark_paid(cid):
     new_start = advanced if advanced >= date.today() else date.today()
     conn.execute(
         "UPDATE customers SET start_date=?, payment_status=? WHERE id=?",
-        (new_start.isoformat(), "Payment pending", cid),
+        (new_start.isoformat(), "Paid", cid),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM customers WHERE id = ?", (cid,)).fetchone()
