@@ -256,10 +256,9 @@ def mark_paid(cid):
         conn.close()
         return jsonify({"error": "Customer not found"}), 404
 
-    # If still active: push forward 1 month from current start.
-    # If already expired: start fresh from today so they get a full month.
-    advanced  = add_one_month(date.fromisoformat(row["start_date"]))
-    new_start = advanced if advanced >= date.today() else date.today()
+    # Always advance 1 month from the current start_date (i.e. the previous expiry).
+    # This preserves the billing cycle even if the user paid late.
+    new_start = add_one_month(date.fromisoformat(row["start_date"]))
     conn.execute(
         "UPDATE customers SET start_date=?, payment_status=? WHERE id=?",
         (new_start.isoformat(), "Paid", cid),
