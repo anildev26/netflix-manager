@@ -660,18 +660,7 @@
         <button class="f-tab" aria-pressed="false" onclick="setFilter('expiring',this)">Expiring Soon</button>
         <button class="f-tab" aria-pressed="false" onclick="setFilter('expired',this)">Expired</button>
       </div>
-      <div class="d-flex gap-2" style="flex:1; min-width:200px; max-width:480px;">
-        <select id="search-col" class="search-box" style="flex:0 0 130px; cursor:pointer;" aria-label="Column to search" onchange="updateSearchPlaceholder(); renderTable();">
-          <option value="all">All columns</option>
-          <option value="name">Name</option>
-          <option value="phone">Phone</option>
-          <option value="account">Account</option>
-          <option value="profile_name">Profile</option>
-          <option value="status">Status</option>
-          <option value="payment_status">Payment</option>
-        </select>
-        <input type="text" class="search-box" id="search" placeholder="&#128269;  Search all columns…" aria-label="Search customers" oninput="renderTable()" style="flex:1;" />
-      </div>
+      <input type="text" class="search-box" id="search" placeholder="&#128269;  Search name, phone or account…" aria-label="Search customers by name, phone or account" oninput="renderTable()" />
 
       <!-- Admin-only action buttons (hidden in demo mode) -->
       <div class="d-flex gap-2 ms-auto" id="admin-actions">
@@ -700,7 +689,7 @@
               <th scope="col">#</th>
               <th scope="col" class="sortable" id="th-name"        onclick="toggleSort('name')"           aria-sort="none">Name            <i class="bi bi-chevron-expand sort-icon" aria-hidden="true"></i></th>
               <th scope="col">Phone / WhatsApp</th>
-              <th scope="col">Account</th>
+              <th scope="col" class="sortable" id="th-account" onclick="toggleSort('account')" aria-sort="none">Account <i class="bi bi-chevron-expand sort-icon" aria-hidden="true"></i></th>
               <th scope="col">Profile</th>
               <th scope="col" class="sortable" id="th-monthly_amount" onclick="toggleSort('monthly_amount')" aria-sort="none">Amount          <i class="bi bi-chevron-expand sort-icon" aria-hidden="true"></i></th>
               <th scope="col">Start Date</th>
@@ -1107,17 +1096,6 @@ function renderStats() {
 /* ════════════════════════════════════════════
    FILTER + RENDER TABLE
 ════════════════════════════════════════════ */
-function updateSearchPlaceholder() {
-  const labels = {
-    all: 'Search all columns…', name: 'Search by name…',
-    phone: 'Search by phone…', account: 'Search by account…',
-    profile_name: 'Search by profile…', status: 'Search by status…',
-    payment_status: 'Search by payment status…',
-  };
-  const col = document.getElementById('search-col').value;
-  document.getElementById('search').placeholder = '🔍  ' + (labels[col] || 'Search…');
-}
-
 function toggleSort(col) {
   if (sortCol === col) {
     sortDir *= -1;
@@ -1173,15 +1151,11 @@ function renderTable() {
   if (curFilter === 'expiring') list = list.filter(c => c.status === 'Expiring soon' || c.status === 'Expires today');
   if (curFilter === 'expired')  list = list.filter(c => c.status === 'Expired');
 
-  if (q) {
-    const col = document.getElementById('search-col').value;
-    const searchFields = ['name','phone','account','profile_name','status','payment_status'];
-    list = list.filter(c =>
-      col === 'all'
-        ? searchFields.some(k => String(c[k]).toLowerCase().includes(q))
-        : String(c[col] ?? '').toLowerCase().includes(q)
-    );
-  }
+  if (q) list = list.filter(c =>
+    c.name.toLowerCase().includes(q) ||
+    c.phone.toLowerCase().includes(q) ||
+    c.account.toLowerCase().includes(q)
+  );
 
   if (sortCol) {
     list.sort((a, b) => {
