@@ -703,6 +703,52 @@
   </div>
 </div>
 
+<!-- ════════════════════════════════════════════
+     MARK AS PAID CONFIRM MODAL
+════════════════════════════════════════════ -->
+<div class="modal fade" id="paid-modal" tabindex="-1">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content" style="border-color: rgba(34,197,94,0.35); background: var(--card);">
+      <div class="modal-header border-0 pb-0">
+        <div class="d-flex align-items-center gap-2">
+          <div style="width:36px;height:36px;border-radius:50%;background:rgba(34,197,94,0.15);display:flex;align-items:center;justify-content:center;">
+            <i class="bi bi-check-lg" style="color:#4ade80;font-size:1.1rem;"></i>
+          </div>
+          <h5 class="modal-title mb-0 fw-bold" style="color:#4ade80;">Mark as Paid</h5>
+        </div>
+        <button type="button" class="btn-close btn-close-white opacity-50" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body pt-3" style="font-size:0.88rem; color:var(--muted);">
+        <p class="mb-3" style="color:var(--text);font-size:0.95rem;">
+          Renewing subscription for <strong id="paid-name" style="color:#4ade80;"></strong>
+        </p>
+        <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:12px 14px;" class="d-flex flex-column gap-2">
+          <div class="d-flex justify-content-between">
+            <span><i class="bi bi-calendar-x me-1 text-danger"></i>Current expiry</span>
+            <strong id="paid-current-exp" style="color:#f87171;"></strong>
+          </div>
+          <hr style="border-color:rgba(255,255,255,0.08);margin:2px 0;">
+          <div class="d-flex justify-content-between">
+            <span><i class="bi bi-calendar-check me-1 text-success"></i>New expiry</span>
+            <strong id="paid-new-exp" style="color:#4ade80;"></strong>
+          </div>
+          <hr style="border-color:rgba(255,255,255,0.08);margin:2px 0;">
+          <div class="d-flex justify-content-between">
+            <span><i class="bi bi-patch-check me-1" style="color:#60a5fa;"></i>Status after</span>
+            <span class="badge" style="background:rgba(34,197,94,0.15);color:#4ade80;font-weight:600;">Paid</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer border-0 pt-1">
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" id="paid-confirm" class="btn btn-sm fw-bold" style="background:#22c55e;color:#000;min-width:110px;">
+          <i class="bi bi-check-lg me-1"></i>Confirm Renewal
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 /* ════════════════════════════════════════════
@@ -710,7 +756,8 @@
 ════════════════════════════════════════════ */
 let customers    = [];
 let curFilter    = 'all';
-let custModal, delModal;
+let custModal, delModal, paidModal;
+let pendingPaidId = null;
 let pendingDelId = null;
 let IS_DEMO      = false;   // true when logged in as test user
 
@@ -720,6 +767,8 @@ let IS_DEMO      = false;   // true when logged in as test user
 document.addEventListener('DOMContentLoaded', () => {
   custModal = new bootstrap.Modal(document.getElementById('cust-modal'));
   delModal  = new bootstrap.Modal(document.getElementById('del-modal'));
+  paidModal = new bootstrap.Modal(document.getElementById('paid-modal'));
+  document.getElementById('paid-confirm').addEventListener('click', confirmPaid);
 
   document.getElementById('login-form').addEventListener('submit', handleLogin);
   document.getElementById('cust-form').addEventListener('submit', handleFormSubmit);
@@ -1108,19 +1157,44 @@ async function confirmDelete() {
 /* ════════════════════════════════════════════
    MARK AS PAID
 ════════════════════════════════════════════ */
-async function markPaid(id) {
+function markPaid(id) {
   const c = customers.find(r => r.id === id);
   if (!c) return;
-  if (!confirm(`Mark ${c.name} as Paid?\n\nThis will renew their subscription by 1 month and reset payment status to "Payment pending".`)) return;
+
+  // Calculate next expiry to show in modal
+  const currentExp = new Date(c.expiry_date);
+  const newExp     = new Date(currentExp);
+  newExp.setMonth(newExp.getMonth() + 1);
+
+  document.getElementById('paid-name').textContent        = c.name;
+  document.getElementById('paid-current-exp').textContent = fmtDate(c.expiry_date);
+  document.getElementById('paid-new-exp').textContent     = fmtDate(newExp.toISOString().slice(0, 10));
+
+  pendingPaidId = id;
+  paidModal.show();
+}
+
+async function confirmPaid() {
+  const id = pendingPaidId;
+  if (!id) return;
+
+  const btn = document.getElementById('paid-confirm');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Renewing…';
 
   try {
     const updated = await api('POST', `/api/customers/${id}/paid`);
     customers = customers.map(r => r.id === updated.id ? updated : r);
-    toast(`${c.name} renewed → expires ${fmtDate(updated.expiry_date)} ✓`, 'ok');
+    paidModal.hide();
+    toast(`${updated.name} renewed — expires ${fmtDate(updated.expiry_date)} ✓`, 'ok');
     renderStats();
     renderTable();
   } catch (ex) {
     toast('Failed: ' + ex.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Confirm Renewal';
+    pendingPaidId = null;
   }
 }
 
