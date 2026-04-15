@@ -116,6 +116,15 @@
     @media (max-width: 900px)  { .stats-grid { grid-template-columns: repeat(2,1fr); } }
     @media (max-width: 500px)  { .stats-grid { grid-template-columns: 1fr; } }
 
+    @media (max-width: 768px) {
+      .controls-bar { flex-direction: column; align-items: stretch; }
+      .filter-tabs  { flex-wrap: wrap; }
+      .search-box   { max-width: 100%; }
+      #admin-actions { flex-wrap: wrap; }
+      .app-nav      { padding: 10px 16px; }
+      main          { padding: 16px !important; }
+    }
+
     .stat-card {
       background: var(--card);
       border: 1px solid var(--border);
@@ -124,7 +133,12 @@
       display: flex;
       align-items: center;
       gap: 16px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      user-select: none;
     }
+    .stat-card:hover  { border-color: #444; background: #242424; }
+    .stat-card.sc-active { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
 
     .stat-icon {
       width: 52px;
@@ -234,6 +248,11 @@
       border-bottom: 1px solid var(--border);
       white-space: nowrap;
       font-weight: 600;
+      /* Sticky header — stays visible while scrolling the table */
+      position: sticky;
+      top: 0;
+      background: #0d0d0d;
+      z-index: 1;
     }
 
     .ct td {
@@ -316,6 +335,11 @@
     .ab.ab-del:hover   { border-color: #ef4444;  color: #ef4444;     }
     .ab.ab-paid:hover  { border-color: #22c55e;  color: #22c55e;     }
     .ab.ab-wa:hover    { border-color: #25D366;  color: #25D366;     }
+
+    /* 44px minimum touch target on mobile (WCAG 2.5.5) */
+    @media (max-width: 768px) {
+      .ab { width: 38px; height: 38px; font-size: 0.9rem; }
+    }
 
     /* ════════════════════════════
        FORMS / MODAL
@@ -448,6 +472,37 @@
       to   { transform: translateX(0);    opacity: 1; }
     }
 
+    /* ════════════════════════════
+       SKELETON LOADER
+    ════════════════════════════ */
+    .skel {
+      height: 13px;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #252525 25%, #2e2e2e 50%, #252525 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s infinite;
+    }
+    .skel.skel-sm  { width: 40%; }
+    .skel.skel-md  { width: 65%; }
+    .skel.skel-lg  { width: 85%; }
+    .skel.skel-xs  { width: 28%; }
+    @keyframes shimmer {
+      0%   { background-position:  200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ════════════════════════════
+       SORTABLE HEADERS
+    ════════════════════════════ */
+    .ct th.sortable {
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .ct th.sortable:hover { color: var(--text); }
+    .sort-icon { margin-left: 4px; opacity: 0.35; font-size: 0.65rem; }
+    .ct th.sort-asc  .sort-icon,
+    .ct th.sort-desc .sort-icon { opacity: 1; color: var(--red); }
+
     .t-toast.ok  { border-left: 3px solid #22c55e; }
     .t-toast.err { border-left: 3px solid #ef4444; }
     .t-toast.inf { border-left: 3px solid #3b82f6; }
@@ -518,7 +573,13 @@
       </div>
       <div class="mb-4">
         <label class="form-label" for="lp">Password</label>
-        <input id="lp" type="password" class="form-control" placeholder="••••••••" required autocomplete="current-password" />
+        <div style="position:relative;">
+          <input id="lp" type="password" class="form-control" placeholder="••••••••" required autocomplete="current-password" style="padding-right:42px;" />
+          <button type="button" id="pw-toggle" aria-label="Show password" onclick="togglePw()"
+            style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;line-height:1;">
+            <i class="bi bi-eye" id="pw-eye" aria-hidden="true"></i>
+          </button>
+        </div>
       </div>
       <button type="submit" id="login-btn" class="btn-red w-100" style="border-radius:7px; padding:10px;">
         Sign In
@@ -551,9 +612,9 @@
   <!-- Content -->
   <main style="padding:24px; max-width:1440px; margin:0 auto;">
 
-    <!-- Stat Cards -->
+    <!-- Stat Cards — click to filter table -->
     <div class="stats-grid">
-      <div class="stat-card">
+      <div class="stat-card sc-active" id="sc-all" role="button" tabindex="0" aria-label="Show all customers" onclick="filterByStat('all')">
         <div class="stat-icon" style="background:rgba(99,102,241,0.12); color:#818cf8;" aria-hidden="true">
           <i class="bi bi-people-fill"></i>
         </div>
@@ -562,7 +623,7 @@
           <div class="stat-label">Total Customers</div>
         </div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card" id="sc-active" role="button" tabindex="0" aria-label="Filter active customers" onclick="filterByStat('active')">
         <div class="stat-icon" style="background:rgba(34,197,94,0.12); color:#4ade80;" aria-hidden="true">
           <i class="bi bi-check-circle-fill"></i>
         </div>
@@ -571,7 +632,7 @@
           <div class="stat-label">Active</div>
         </div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card" id="sc-expiring" role="button" tabindex="0" aria-label="Filter expiring customers" onclick="filterByStat('expiring')">
         <div class="stat-icon" style="background:rgba(251,146,60,0.12); color:#fb923c;" aria-hidden="true">
           <i class="bi bi-clock-fill"></i>
         </div>
@@ -580,7 +641,7 @@
           <div class="stat-label">Expiring Soon</div>
         </div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card" id="sc-expired" role="button" tabindex="0" aria-label="Filter expired customers" onclick="filterByStat('expired')">
         <div class="stat-icon" style="background:rgba(239,68,68,0.12); color:#f87171;" aria-hidden="true">
           <i class="bi bi-x-circle-fill"></i>
         </div>
@@ -626,24 +687,20 @@
           <thead>
             <tr>
               <th scope="col">#</th>
-              <th scope="col">Name</th>
+              <th scope="col" class="sortable" id="th-name"        onclick="toggleSort('name')"           aria-sort="none">Name            <i class="bi bi-chevron-expand sort-icon" aria-hidden="true"></i></th>
               <th scope="col">Phone / WhatsApp</th>
               <th scope="col">Account</th>
               <th scope="col">Profile</th>
-              <th scope="col">Amount</th>
+              <th scope="col" class="sortable" id="th-monthly_amount" onclick="toggleSort('monthly_amount')" aria-sort="none">Amount          <i class="bi bi-chevron-expand sort-icon" aria-hidden="true"></i></th>
               <th scope="col">Start Date</th>
-              <th scope="col">Expiry Date</th>
-              <th scope="col">Days Left</th>
-              <th scope="col">Status</th>
-              <th scope="col">Payment</th>
+              <th scope="col" class="sortable" id="th-expiry_date" onclick="toggleSort('expiry_date')"    aria-sort="none">Expiry Date     <i class="bi bi-chevron-expand sort-icon" aria-hidden="true"></i></th>
+              <th scope="col" class="sortable sort-asc" id="th-days_left"   onclick="toggleSort('days_left')"    aria-sort="ascending">Days Left <i class="bi bi-chevron-up sort-icon" aria-hidden="true"></i></th>
+              <th scope="col" class="sortable" id="th-status"      onclick="toggleSort('status')"         aria-sort="none">Status          <i class="bi bi-chevron-expand sort-icon" aria-hidden="true"></i></th>
+              <th scope="col" class="sortable" id="th-payment_status" onclick="toggleSort('payment_status')" aria-sort="none">Payment       <i class="bi bi-chevron-expand sort-icon" aria-hidden="true"></i></th>
               <th scope="col">Actions</th>
             </tr>
           </thead>
-          <tbody id="tbody">
-            <tr><td colspan="12" style="text-align:center; padding:40px; color:var(--muted);">
-              <i class="bi bi-arrow-repeat"></i> Loading…
-            </td></tr>
-          </tbody>
+          <tbody id="tbody"></tbody>
         </table>
       </div>
     </div>
@@ -784,10 +841,12 @@
 ════════════════════════════════════════════ */
 let customers    = [];
 let curFilter    = 'all';
+let sortCol      = 'days_left';   // default sort: soonest expiry first
+let sortDir      = 1;
 let custModal, delModal, paidModal;
 let pendingPaidId = null;
 let pendingDelId = null;
-let IS_DEMO      = false;   // true when logged in as test user
+let IS_DEMO      = false;
 
 /* ════════════════════════════════════════════
    INIT
@@ -956,10 +1015,32 @@ async function handleLogin(e) {
   }
 }
 
+function togglePw() {
+  const inp  = document.getElementById('lp');
+  const eye  = document.getElementById('pw-eye');
+  const btn  = document.getElementById('pw-toggle');
+  const show = inp.type === 'password';
+  inp.type   = show ? 'text' : 'password';
+  eye.className = show ? 'bi bi-eye-slash' : 'bi bi-eye';
+  btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+}
+
 function logout() {
+  // Wipe all in-memory state so the next login never sees previous user's data
+  customers    = [];
+  IS_DEMO      = false;
+  sortCol      = 'days_left';
+  sortDir      = 1;
+  curFilter    = 'all';
   localStorage.removeItem('nf_token');
-  IS_DEMO = false;
-  document.getElementById('app').style.display = 'none';
+
+  // Clear rendered table + stats immediately
+  document.getElementById('tbody').innerHTML = '';
+  ['s-total','s-active','s-expiring','s-expired'].forEach(id => {
+    document.getElementById(id).textContent = '–';
+  });
+
+  document.getElementById('app').style.display         = 'none';
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('lp').value = '';
 }
@@ -977,7 +1058,15 @@ function showApp() {
 /* ════════════════════════════════════════════
    DATA
 ════════════════════════════════════════════ */
+function showSkeleton() {
+  const widths = ['skel-sm','skel-lg','skel-md','skel-md','skel-sm','skel-xs','skel-sm','skel-sm','skel-xs','skel-sm','skel-sm','skel-xs'];
+  document.getElementById('tbody').innerHTML = Array(6).fill(null).map(() =>
+    `<tr>${widths.map(w => `<td><div class="skel ${w}"></div></td>`).join('')}</tr>`
+  ).join('');
+}
+
 async function loadCustomers() {
+  showSkeleton();
   try {
     customers = await api('GET', '/api/customers');
     renderStats();
@@ -985,6 +1074,8 @@ async function loadCustomers() {
   } catch (ex) {
     if (ex.status === 401) { logout(); return; }
     toast('Could not load customers: ' + ex.message, 'err');
+    document.getElementById('tbody').innerHTML =
+      `<tr><td colspan="12"><div class="empty"><i class="bi bi-wifi-off" aria-hidden="true"></i><strong>Could not load data</strong><p>${ex.message}</p></div></td></tr>`;
   }
 }
 
@@ -1005,6 +1096,29 @@ function renderStats() {
 /* ════════════════════════════════════════════
    FILTER + RENDER TABLE
 ════════════════════════════════════════════ */
+function toggleSort(col) {
+  if (sortCol === col) {
+    sortDir *= -1;
+  } else {
+    sortCol = col;
+    sortDir = 1;
+  }
+  // Update header classes + aria-sort
+  document.querySelectorAll('.ct th.sortable').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    th.setAttribute('aria-sort', 'none');
+    th.querySelector('.sort-icon').className = 'bi bi-chevron-expand sort-icon';
+  });
+  const active = document.getElementById(`th-${col}`);
+  if (active) {
+    const cls = sortDir === 1 ? 'sort-asc' : 'sort-desc';
+    active.classList.add(cls);
+    active.setAttribute('aria-sort', sortDir === 1 ? 'ascending' : 'descending');
+    active.querySelector('.sort-icon').className = `bi bi-chevron-${sortDir === 1 ? 'up' : 'down'} sort-icon`;
+  }
+  renderTable();
+}
+
 function setFilter(f, btn) {
   curFilter = f;
   document.querySelectorAll('.f-tab').forEach(t => {
@@ -1013,7 +1127,19 @@ function setFilter(f, btn) {
   });
   btn.classList.add('active');
   btn.setAttribute('aria-pressed', 'true');
+  // Sync stat card highlight
+  ['all','active','expiring','expired'].forEach(k => {
+    document.getElementById(`sc-${k}`)?.classList.toggle('sc-active', k === f);
+  });
   renderTable();
+}
+
+function filterByStat(f) {
+  const tabMap = { all: 0, active: 1, expiring: 2, expired: 3 };
+  const tabs   = document.querySelectorAll('.f-tab');
+  setFilter(f, tabs[tabMap[f]]);
+  // Scroll table into view smoothly
+  document.querySelector('.table-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function renderTable() {
@@ -1030,6 +1156,14 @@ function renderTable() {
     c.phone.toLowerCase().includes(q) ||
     c.account.toLowerCase().includes(q)
   );
+
+  if (sortCol) {
+    list.sort((a, b) => {
+      const av = a[sortCol], bv = b[sortCol];
+      if (typeof av === 'number') return (av - bv) * sortDir;
+      return String(av).localeCompare(String(bv)) * sortDir;
+    });
+  }
 
   const tbody = document.getElementById('tbody');
 
