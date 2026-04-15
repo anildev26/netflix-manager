@@ -120,7 +120,7 @@
       .controls-bar { flex-direction: column; align-items: stretch; }
       .filter-tabs  { flex-wrap: wrap; }
       .search-box   { max-width: 100%; }
-      #admin-actions { flex-wrap: wrap; }
+      #admin-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
       .app-nav      { padding: 10px 16px; }
       main          { padding: 16px !important; }
     }
@@ -663,7 +663,7 @@
       <input type="text" class="search-box" id="search" placeholder="&#128269;  Search name, phone or account…" aria-label="Search customers by name, phone or account" oninput="renderTable()" />
 
       <!-- Admin-only action buttons (hidden in demo mode) -->
-      <div class="d-flex gap-2 ms-auto" id="admin-actions">
+      <div class="ms-auto" id="admin-actions">
         <button class="btn-outline-csv" onclick="exportCSV()" title="Download all customers as CSV">
           <i class="bi bi-download"></i> Export
         </button>
