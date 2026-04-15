@@ -1,20 +1,22 @@
 import csv
 import io
 import os
-import sqlite3
 import calendar
 from datetime import date, datetime, timedelta
 from functools import wraps
 
+import psycopg2
+import psycopg2.extras
 from flask import Flask, jsonify, request, send_from_directory, Response
 import jwt
 
 # ─── App & config ─────────────────────────────────────────────────────────────
 
-app = Flask(__name__, static_folder="public")
+_base_dir = os.path.dirname(os.path.abspath(__file__))
+app = Flask(__name__, static_folder=os.path.join(_base_dir, "public"))
 
-DB_PATH    = os.environ.get("DB_PATH", "netflix.db")
-JWT_SECRET = os.environ.get("JWT_SECRET", "change-this-secret-in-production-32chars+")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+JWT_SECRET   = os.environ.get("JWT_SECRET", "change-this-secret-in-production-32chars+")
 
 ADMIN_USER = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASS = os.environ.get("ADMIN_PASSWORD", "admin123")
@@ -25,27 +27,32 @@ TEST_PASS  = os.environ.get("TEST_PASSWORD", "Test@Admin123")
 # ─── Database ─────────────────────────────────────────────────────────────────
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(DATABASE_URL)
     return conn
+
+
+def get_cursor(conn):
+    return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 def init_db():
     conn = get_db()
-    conn.execute("""
+    cur  = get_cursor(conn)
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS customers (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            name            TEXT    NOT NULL,
-            phone           TEXT    NOT NULL,
-            account         TEXT    NOT NULL,
-            profile_name    TEXT    NOT NULL,
-            monthly_amount  REAL    NOT NULL DEFAULT 0,
-            start_date      TEXT    NOT NULL,
-            payment_status  TEXT    NOT NULL DEFAULT 'Payment pending',
-            created_at      TEXT    NOT NULL DEFAULT (date('now'))
+            id              SERIAL PRIMARY KEY,
+            name            TEXT   NOT NULL,
+            phone           TEXT   NOT NULL,
+            account         TEXT   NOT NULL,
+            profile_name    TEXT   NOT NULL,
+            monthly_amount  REAL   NOT NULL DEFAULT 0,
+            start_date      TEXT   NOT NULL,
+            payment_status  TEXT   NOT NULL DEFAULT 'Payment pending',
+            created_at      TEXT   NOT NULL DEFAULT TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')
         )
     """)
     conn.commit()
+    cur.close()
     conn.close()
 
 # ─── Business logic ───────────────────────────────────────────────────────────
@@ -86,7 +93,6 @@ def compute_customer(row) -> dict:
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 
 def _decode_token():
-    """Decode the Bearer token from the current request. Returns payload dict or None."""
     auth  = request.headers.get("Authorization", "")
     token = auth.replace("Bearer ", "").strip()
     if not token:
@@ -100,16 +106,14 @@ def _decode_token():
 
 
 def token_required(f):
-    """Allow any valid token (admin or test)."""
     @wraps(f)
     def decorated(*args, **kwargs):
         payload = _decode_token()
         if payload is None:
-            auth = request.headers.get("Authorization", "")
+            auth  = request.headers.get("Authorization", "")
             token = auth.replace("Bearer ", "").strip()
             if not token:
                 return jsonify({"error": "Authorization token required"}), 401
-            # Try to give a more specific error
             try:
                 jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
             except jwt.ExpiredSignatureError:
@@ -121,7 +125,6 @@ def token_required(f):
 
 
 def admin_required(f):
-    """Allow only admin role tokens — blocks test/demo users."""
     @wraps(f)
     def decorated(*args, **kwargs):
         payload = _decode_token()
@@ -163,12 +166,14 @@ def get_customers():
     role    = payload.get("role", "admin") if payload else "admin"
 
     conn = get_db()
-    rows = conn.execute("SELECT * FROM customers ORDER BY id").fetchall()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT * FROM customers ORDER BY id")
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
 
     result = [compute_customer(r) for r in rows]
 
-    # Mask sensitive fields for test/demo users
     if role == "test":
         for c in result:
             c["phone"]          = "●●●●●●●●●●"
@@ -187,10 +192,12 @@ def add_customer():
             return jsonify({"error": f"Missing required field: {field}"}), 400
 
     conn = get_db()
-    cur = conn.execute(
+    cur  = get_cursor(conn)
+    cur.execute(
         """INSERT INTO customers
                (name, phone, account, profile_name, monthly_amount, start_date, payment_status)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s)
+           RETURNING id""",
         (
             data["name"].strip(),
             data["phone"].strip(),
@@ -201,8 +208,12 @@ def add_customer():
             data.get("payment_status", "Payment pending"),
         ),
     )
+    new_id = cur.fetchone()["id"]
     conn.commit()
-    row = conn.execute("SELECT * FROM customers WHERE id = ?", (cur.lastrowid,)).fetchone()
+
+    cur.execute("SELECT * FROM customers WHERE id = %s", (new_id,))
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     return jsonify(compute_customer(row)), 201
 
@@ -212,11 +223,12 @@ def add_customer():
 def update_customer(cid):
     data = request.get_json(silent=True) or {}
     conn = get_db()
-    conn.execute(
+    cur  = get_cursor(conn)
+    cur.execute(
         """UPDATE customers
-           SET name=?, phone=?, account=?, profile_name=?,
-               monthly_amount=?, start_date=?, payment_status=?
-           WHERE id=?""",
+           SET name=%s, phone=%s, account=%s, profile_name=%s,
+               monthly_amount=%s, start_date=%s, payment_status=%s
+           WHERE id=%s""",
         (
             data["name"].strip(),
             data["phone"].strip(),
@@ -229,8 +241,12 @@ def update_customer(cid):
         ),
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM customers WHERE id = ?", (cid,)).fetchone()
+
+    cur.execute("SELECT * FROM customers WHERE id = %s", (cid,))
+    row = cur.fetchone()
+    cur.close()
     conn.close()
+
     if not row:
         return jsonify({"error": "Customer not found"}), 404
     return jsonify(compute_customer(row))
@@ -240,8 +256,10 @@ def update_customer(cid):
 @admin_required
 def delete_customer(cid):
     conn = get_db()
-    conn.execute("DELETE FROM customers WHERE id = ?", (cid,))
+    cur  = get_cursor(conn)
+    cur.execute("DELETE FROM customers WHERE id = %s", (cid,))
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"success": True})
 
@@ -249,22 +267,26 @@ def delete_customer(cid):
 @app.route("/api/customers/<int:cid>/paid", methods=["POST"])
 @admin_required
 def mark_paid(cid):
-    """Renew subscription: advance start_date by 1 month, reset payment status."""
     conn = get_db()
-    row = conn.execute("SELECT * FROM customers WHERE id = ?", (cid,)).fetchone()
+    cur  = get_cursor(conn)
+
+    cur.execute("SELECT * FROM customers WHERE id = %s", (cid,))
+    row = cur.fetchone()
     if not row:
+        cur.close()
         conn.close()
         return jsonify({"error": "Customer not found"}), 404
 
-    # Always advance 1 month from the current start_date (i.e. the previous expiry).
-    # This preserves the billing cycle even if the user paid late.
     new_start = add_one_month(date.fromisoformat(row["start_date"]))
-    conn.execute(
-        "UPDATE customers SET start_date=?, payment_status=? WHERE id=?",
+    cur.execute(
+        "UPDATE customers SET start_date=%s, payment_status=%s WHERE id=%s",
         (new_start.isoformat(), "Paid", cid),
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM customers WHERE id = ?", (cid,)).fetchone()
+
+    cur.execute("SELECT * FROM customers WHERE id = %s", (cid,))
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     return jsonify(compute_customer(row))
 
@@ -278,7 +300,10 @@ CSV_FIELDS  = ["name", "phone", "account", "profile_name", "monthly_amount", "st
 @admin_required
 def export_customers():
     conn = get_db()
-    rows = conn.execute("SELECT * FROM customers ORDER BY id").fetchall()
+    cur  = get_cursor(conn)
+    cur.execute("SELECT * FROM customers ORDER BY id")
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
 
     buf = io.StringIO()
@@ -304,7 +329,7 @@ def import_customers():
         return jsonify({"error": "No file provided"}), 400
 
     try:
-        content = file.read().decode("utf-8-sig")   # utf-8-sig strips Excel BOM
+        content = file.read().decode("utf-8-sig")
         reader  = csv.DictReader(io.StringIO(content))
     except Exception as e:
         return jsonify({"error": f"Could not read file: {e}"}), 400
@@ -313,9 +338,9 @@ def import_customers():
     errors = []
 
     conn = get_db()
+    cur  = get_cursor(conn)
     try:
         for row_num, raw in enumerate(reader, start=2):
-            # Normalize keys: strip whitespace, lower-case for flexible matching
             row = {k.strip().lower(): v.strip() for k, v in raw.items() if k}
 
             def get(*keys):
@@ -355,19 +380,32 @@ def import_customers():
                 errors.append(f"Row {row_num}: {'; '.join(row_errors)}")
                 continue
 
-            conn.execute(
+            cur.execute(
                 """INSERT INTO customers
                        (name, phone, account, profile_name, monthly_amount, start_date, payment_status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                 (name, phone, account, profile_name, amount, start_date_raw, payment_status),
             )
             added += 1
 
         conn.commit()
     finally:
+        cur.close()
         conn.close()
 
     return jsonify({"added": added, "errors": errors})
+
+
+# ─── Setup endpoint (run once after deploy) ───────────────────────────────────
+
+@app.route("/api/setup", methods=["POST"])
+def setup():
+    """Create tables. Call once after first deploy."""
+    secret = request.headers.get("X-Setup-Secret", "")
+    if secret != JWT_SECRET:
+        return jsonify({"error": "Forbidden"}), 403
+    init_db()
+    return jsonify({"ok": True})
 
 
 # ─── Serve frontend ────────────────────────────────────────────────────────────
@@ -375,9 +413,10 @@ def import_customers():
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve(path):
-    if path and os.path.exists(os.path.join("public", path)):
-        return send_from_directory("public", path)
-    return send_from_directory("public", "index.html")
+    public = os.path.join(_base_dir, "public")
+    if path and os.path.exists(os.path.join(public, path)):
+        return send_from_directory(public, path)
+    return send_from_directory(public, "index.html")
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -387,6 +426,5 @@ if __name__ == "__main__":
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     print(f"\n  Netflix Manager running at http://localhost:{port}")
     print(f"  Admin : {ADMIN_USER}")
-    print(f"  Test  : {TEST_USER}")
-    print(f"  Using custom JWT secret: {'YES' if JWT_SECRET != 'change-this-secret-in-production-32chars+' else 'NO (using default!)'}\n")
+    print(f"  Test  : {TEST_USER}\n")
     app.run(host="0.0.0.0", port=port, debug=debug)
