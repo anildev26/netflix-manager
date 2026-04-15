@@ -3,8 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Netflix Manager</title>
+  <meta name="description" content="Private admin portal for managing Netflix subscription customers, renewals, and payments." />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="theme-color" content="#141414" />
+  <title>Netflix Manager — Admin Portal</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <!-- DNS prefetch for CDN — shaves ~100-200ms on first load -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
   <style>
@@ -388,9 +394,13 @@
       border-radius: 8px;
       padding: 14px 18px;
       font-size: 0.875rem;
+      color: #fff;
       display: none;
     }
-    #import-result.visible { display: block; }
+    #import-result.visible     { display: block; }
+    #import-result.res-ok      { background: #14532d; border: 1px solid #16a34a; }
+    #import-result.res-partial { background: #713f12; border: 1px solid #ca8a04; }
+    #import-result.res-fail    { background: #450a0a; border: 1px solid #dc2626; }
 
     /* ════════════════════════════
        EMPTY STATE
@@ -441,12 +451,53 @@
     .t-toast.ok  { border-left: 3px solid #22c55e; }
     .t-toast.err { border-left: 3px solid #ef4444; }
     .t-toast.inf { border-left: 3px solid #3b82f6; }
+
+    /* ════════════════════════════
+       FOCUS VISIBLE (keyboard nav)
+    ════════════════════════════ */
+    /* Remove default outline for mouse users, keep for keyboard */
+    :focus:not(:focus-visible) { outline: none; }
+
+    :focus-visible {
+      outline: 2px solid var(--red);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* Tighter offset for small buttons */
+    .ab:focus-visible        { outline-offset: 1px; }
+    .f-tab:focus-visible     { outline-offset: 0;   border-radius: 6px; }
+    .btn-red:focus-visible   { outline-color: #fff;  }
+    .search-box:focus-visible { outline: none; }  /* search has its own red box-shadow */
   </style>
 </head>
 <body>
 
-<!-- Toast container -->
-<div id="toasts"></div>
+<!-- SVG sprite — defined once, reused via <use href="#..."> -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <!-- Full logo (login screen) -->
+  <symbol id="logo-full" viewBox="0 0 72 72">
+    <rect x="3" y="5" width="66" height="46" rx="9" fill="#1a0000" stroke="#E50914" stroke-width="2.5"/>
+    <rect x="9" y="11" width="54" height="34" rx="5" fill="#0a0a0a"/>
+    <path d="M17 16 L17 39 L22.5 39 L22.5 27.5 L32.5 39 L38 39 L38 16 L32.5 16 L32.5 27.5 L22.5 16 Z" fill="#E50914"/>
+    <circle cx="51" cy="28" r="7" fill="#166634" stroke="#22c55e" stroke-width="1.5"/>
+    <path d="M47.5 28 L50 30.5 L54.5 24.5" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <rect x="30" y="51" width="12" height="5" rx="3" fill="#2d2d2d"/>
+    <rect x="22" y="56" width="28" height="4" rx="2" fill="#2d2d2d"/>
+    <rect x="22" y="59" width="28" height="1" rx="0.5" fill="#E50914" opacity="0.5"/>
+  </symbol>
+  <!-- Compact logo (navbar) — same art, no stand -->
+  <symbol id="logo-sm" viewBox="0 0 72 55">
+    <rect x="3" y="5" width="66" height="46" rx="9" fill="#1a0000" stroke="#E50914" stroke-width="2.5"/>
+    <rect x="9" y="11" width="54" height="34" rx="5" fill="#0a0a0a"/>
+    <path d="M17 16 L17 39 L22.5 39 L22.5 27.5 L32.5 39 L38 39 L38 16 L32.5 16 L32.5 27.5 L22.5 16 Z" fill="#E50914"/>
+    <circle cx="51" cy="28" r="7" fill="#166634" stroke="#22c55e" stroke-width="1.5"/>
+    <path d="M47.5 28 L50 30.5 L54.5 24.5" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </symbol>
+</svg>
+
+<!-- Toast container — aria-live so screen readers announce notifications -->
+<div id="toasts" aria-live="polite" aria-atomic="false"></div>
 
 <!-- ════════════════════════════════════════════
      LOGIN SCREEN
@@ -455,35 +506,19 @@
   <div class="login-card">
     <!-- Brand icon (monitor + N + active badge) -->
     <div class="brand-logo">
-      <svg width="80" height="80" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">
-        <!-- Monitor body with red border glow -->
-        <rect x="3" y="5" width="66" height="46" rx="9" fill="#1a0000" stroke="#E50914" stroke-width="2.5"/>
-        <!-- Screen inner area -->
-        <rect x="9" y="11" width="54" height="34" rx="5" fill="#0a0a0a"/>
-        <!-- Netflix-style N letterform -->
-        <path d="M17 16 L17 39 L22.5 39 L22.5 27.5 L32.5 39 L38 39 L38 16 L32.5 16 L32.5 27.5 L22.5 16 Z" fill="#E50914"/>
-        <!-- Green "all active" badge with checkmark -->
-        <circle cx="51" cy="28" r="7" fill="#166534" stroke="#22c55e" stroke-width="1.5"/>
-        <path d="M47.5 28 L50 30.5 L54.5 24.5" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-        <!-- Monitor stand neck -->
-        <rect x="30" y="51" width="12" height="5" rx="3" fill="#2d2d2d"/>
-        <!-- Stand base -->
-        <rect x="22" y="56" width="28" height="4" rx="2" fill="#2d2d2d"/>
-        <!-- Subtle red underline on stand base -->
-        <rect x="22" y="59" width="28" height="1" rx="0.5" fill="#E50914" opacity="0.5"/>
-      </svg>
+      <svg width="80" height="80" aria-hidden="true" focusable="false"><use href="#logo-full"/></svg>
     </div>
     <div class="brand-name">Netflix Manager</div>
     <div class="brand-sub">Admin Portal</div>
 
     <form id="login-form" autocomplete="off">
       <div class="mb-3">
-        <label class="form-label">Username</label>
-        <input id="lu" type="text" class="form-control" placeholder="admin" required autofocus />
+        <label class="form-label" for="lu">Username</label>
+        <input id="lu" type="text" class="form-control" placeholder="admin" required autofocus autocomplete="username" />
       </div>
       <div class="mb-4">
-        <label class="form-label">Password</label>
-        <input id="lp" type="password" class="form-control" placeholder="••••••••" required />
+        <label class="form-label" for="lp">Password</label>
+        <input id="lp" type="password" class="form-control" placeholder="••••••••" required autocomplete="current-password" />
       </div>
       <button type="submit" id="login-btn" class="btn-red w-100" style="border-radius:7px; padding:10px;">
         Sign In
@@ -499,23 +534,16 @@
 <div id="app" style="display:none;">
 
   <!-- Navbar -->
-  <nav class="app-nav">
+  <nav class="app-nav" aria-label="Main navigation">
     <div class="nav-brand">
-      <!-- Compact monitor icon for navbar -->
-      <svg width="32" height="32" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">
-        <rect x="3" y="5" width="66" height="46" rx="9" fill="#1a0000" stroke="#E50914" stroke-width="2.5"/>
-        <rect x="9" y="11" width="54" height="34" rx="5" fill="#0a0a0a"/>
-        <path d="M17 16 L17 39 L22.5 39 L22.5 27.5 L32.5 39 L38 39 L38 16 L32.5 16 L32.5 27.5 L22.5 16 Z" fill="#E50914"/>
-        <circle cx="51" cy="28" r="7" fill="#166534" stroke="#22c55e" stroke-width="1.5"/>
-        <path d="M47.5 28 L50 30.5 L54.5 24.5" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-      </svg>
+      <svg width="32" height="32" aria-hidden="true" focusable="false"><use href="#logo-sm"/></svg>
       Netflix Manager
     </div>
     <div class="d-flex align-items-center gap-3">
       <span class="demo-badge" id="demo-badge">&#128065; Demo Mode</span>
       <span id="nav-role-label" style="color:var(--muted); font-size:0.8rem;">Admin</span>
-      <button class="btn btn-sm btn-outline-secondary" style="border-color:var(--border); color:var(--muted);" onclick="logout()">
-        <i class="bi bi-box-arrow-right"></i> Logout
+      <button class="btn btn-sm btn-outline-secondary" style="border-color:var(--border); color:var(--muted);" onclick="logout()" aria-label="Logout">
+        <i class="bi bi-box-arrow-right" aria-hidden="true"></i> Logout
       </button>
     </div>
   </nav>
@@ -526,38 +554,38 @@
     <!-- Stat Cards -->
     <div class="stats-grid">
       <div class="stat-card">
-        <div class="stat-icon" style="background:rgba(99,102,241,0.12); color:#818cf8;">
+        <div class="stat-icon" style="background:rgba(99,102,241,0.12); color:#818cf8;" aria-hidden="true">
           <i class="bi bi-people-fill"></i>
         </div>
         <div>
-          <div class="stat-num" id="s-total">–</div>
+          <div class="stat-num" id="s-total" aria-live="polite">–</div>
           <div class="stat-label">Total Customers</div>
         </div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon" style="background:rgba(34,197,94,0.12); color:#4ade80;">
+        <div class="stat-icon" style="background:rgba(34,197,94,0.12); color:#4ade80;" aria-hidden="true">
           <i class="bi bi-check-circle-fill"></i>
         </div>
         <div>
-          <div class="stat-num" id="s-active">–</div>
+          <div class="stat-num" id="s-active" aria-live="polite">–</div>
           <div class="stat-label">Active</div>
         </div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon" style="background:rgba(251,146,60,0.12); color:#fb923c;">
+        <div class="stat-icon" style="background:rgba(251,146,60,0.12); color:#fb923c;" aria-hidden="true">
           <i class="bi bi-clock-fill"></i>
         </div>
         <div>
-          <div class="stat-num" id="s-expiring">–</div>
+          <div class="stat-num" id="s-expiring" aria-live="polite">–</div>
           <div class="stat-label">Expiring Soon</div>
         </div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon" style="background:rgba(239,68,68,0.12); color:#f87171;">
+        <div class="stat-icon" style="background:rgba(239,68,68,0.12); color:#f87171;" aria-hidden="true">
           <i class="bi bi-x-circle-fill"></i>
         </div>
         <div>
-          <div class="stat-num" id="s-expired">–</div>
+          <div class="stat-num" id="s-expired" aria-live="polite">–</div>
           <div class="stat-label">Expired</div>
         </div>
       </div>
@@ -565,13 +593,13 @@
 
     <!-- Controls -->
     <div class="controls-bar">
-      <div class="filter-tabs">
-        <button class="f-tab active" onclick="setFilter('all',this)">All</button>
-        <button class="f-tab" onclick="setFilter('active',this)">Active</button>
-        <button class="f-tab" onclick="setFilter('expiring',this)">Expiring Soon</button>
-        <button class="f-tab" onclick="setFilter('expired',this)">Expired</button>
+      <div class="filter-tabs" role="group" aria-label="Filter customers">
+        <button class="f-tab active" aria-pressed="true"  onclick="setFilter('all',this)">All</button>
+        <button class="f-tab" aria-pressed="false" onclick="setFilter('active',this)">Active</button>
+        <button class="f-tab" aria-pressed="false" onclick="setFilter('expiring',this)">Expiring Soon</button>
+        <button class="f-tab" aria-pressed="false" onclick="setFilter('expired',this)">Expired</button>
       </div>
-      <input type="text" class="search-box" id="search" placeholder="&#128269;  Search name, phone or account…" oninput="renderTable()" />
+      <input type="text" class="search-box" id="search" placeholder="&#128269;  Search name, phone or account…" aria-label="Search customers by name, phone or account" oninput="renderTable()" />
 
       <!-- Admin-only action buttons (hidden in demo mode) -->
       <div class="d-flex gap-2 ms-auto" id="admin-actions">
@@ -594,21 +622,21 @@
     <!-- Table -->
     <div class="table-wrap">
       <div class="t-scroll">
-        <table class="ct">
+        <table class="ct" aria-label="Customer subscriptions">
           <thead>
             <tr>
-              <th>#</th>
-              <th>Name</th>
-              <th>Phone / WhatsApp</th>
-              <th>Account</th>
-              <th>Profile</th>
-              <th>Amount</th>
-              <th>Start Date</th>
-              <th>Expiry Date</th>
-              <th>Days Left</th>
-              <th>Status</th>
-              <th>Payment</th>
-              <th>Actions</th>
+              <th scope="col">#</th>
+              <th scope="col">Name</th>
+              <th scope="col">Phone / WhatsApp</th>
+              <th scope="col">Account</th>
+              <th scope="col">Profile</th>
+              <th scope="col">Amount</th>
+              <th scope="col">Start Date</th>
+              <th scope="col">Expiry Date</th>
+              <th scope="col">Days Left</th>
+              <th scope="col">Status</th>
+              <th scope="col">Payment</th>
+              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody id="tbody">
@@ -626,11 +654,11 @@
 <!-- ════════════════════════════════════════════
      ADD / EDIT MODAL
 ════════════════════════════════════════════ -->
-<div class="modal fade" id="cust-modal" tabindex="-1">
+<div class="modal fade" id="cust-modal" tabindex="-1" aria-labelledby="cust-modal-title" aria-modal="true" role="dialog">
   <div class="modal-dialog modal-lg modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="modal-title">Add Customer</h5>
+        <h5 class="modal-title" id="cust-modal-title">Add Customer</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <form id="cust-form">
@@ -683,11 +711,11 @@
 <!-- ════════════════════════════════════════════
      DELETE CONFIRM MODAL
 ════════════════════════════════════════════ -->
-<div class="modal fade" id="del-modal" tabindex="-1">
+<div class="modal fade" id="del-modal" tabindex="-1" aria-labelledby="del-modal-title" aria-modal="true" role="dialog">
   <div class="modal-dialog modal-sm modal-dialog-centered">
     <div class="modal-content" style="border-color: rgba(239,68,68,0.4);">
       <div class="modal-header">
-        <h5 class="modal-title" style="color:#f87171;">
+        <h5 class="modal-title" id="del-modal-title" style="color:#f87171;">
           <i class="bi bi-exclamation-triangle-fill me-2"></i>Delete Customer
         </h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -706,7 +734,7 @@
 <!-- ════════════════════════════════════════════
      MARK AS PAID CONFIRM MODAL
 ════════════════════════════════════════════ -->
-<div class="modal fade" id="paid-modal" tabindex="-1">
+<div class="modal fade" id="paid-modal" tabindex="-1" aria-labelledby="paid-modal-title" aria-modal="true" role="dialog">
   <div class="modal-dialog modal-sm modal-dialog-centered">
     <div class="modal-content" style="border-color: rgba(34,197,94,0.35); background: var(--card);">
       <div class="modal-header border-0 pb-0">
@@ -714,7 +742,7 @@
           <div style="width:36px;height:36px;border-radius:50%;background:rgba(34,197,94,0.15);display:flex;align-items:center;justify-content:center;">
             <i class="bi bi-check-lg" style="color:#4ade80;font-size:1.1rem;"></i>
           </div>
-          <h5 class="modal-title mb-0 fw-bold" style="color:#4ade80;">Mark as Paid</h5>
+          <h5 class="modal-title mb-0 fw-bold" id="paid-modal-title" style="color:#4ade80;">Mark as Paid</h5>
         </div>
         <button type="button" class="btn-close btn-close-white opacity-50" data-bs-dismiss="modal"></button>
       </div>
@@ -857,8 +885,7 @@ function handleImport(input) {
 
 async function importCSV(file) {
   const banner = document.getElementById('import-result');
-  banner.className = '';
-  banner.style.display = 'none';
+  banner.className = '';  // clears visible + res-* classes
 
   toast('Importing…', 'inf');
   try {
@@ -879,7 +906,7 @@ async function importCSV(file) {
 
     // Build result banner
     const hasErrors = data.errors && data.errors.length > 0;
-    const bgColor   = data.added > 0 && !hasErrors ? '#14532d' : (data.added > 0 ? '#713f12' : '#450a0a');
+    const resClass  = data.added > 0 && !hasErrors ? 'res-ok' : (data.added > 0 ? 'res-partial' : 'res-fail');
     const icon      = data.added > 0 && !hasErrors ? '✅' : (data.added > 0 ? '⚠️' : '❌');
 
     let html = `<strong>${icon} ${data.added} customer(s) imported successfully.</strong>`;
@@ -889,15 +916,11 @@ async function importCSV(file) {
               data.errors.map(e => `<li>${e}</li>`).join('') + `</ul>`;
     }
 
-    banner.innerHTML       = html;
-    banner.style.background = bgColor;
-    banner.style.border    = `1px solid ${hasErrors ? '#ca8a04' : (data.added > 0 ? '#16a34a' : '#dc2626')}`;
-    banner.style.color     = '#fff';
-    banner.style.borderRadius = '8px';
-    banner.style.display   = 'block';
+    banner.innerHTML  = html;
+    banner.className  = `visible ${resClass}`;
 
     // Auto-hide after 12 seconds
-    setTimeout(() => { banner.style.display = 'none'; }, 12000);
+    setTimeout(() => { banner.className = ''; }, 12000);
 
   } catch (ex) {
     toast('Import failed: ' + ex.message, 'err');
@@ -984,8 +1007,12 @@ function renderStats() {
 ════════════════════════════════════════════ */
 function setFilter(f, btn) {
   curFilter = f;
-  document.querySelectorAll('.f-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.f-tab').forEach(t => {
+    t.classList.remove('active');
+    t.setAttribute('aria-pressed', 'false');
+  });
   btn.classList.add('active');
+  btn.setAttribute('aria-pressed', 'true');
   renderTable();
 }
 
@@ -1029,10 +1056,10 @@ function renderTable() {
     const actions = IS_DEMO
       ? `<span style="color:var(--muted); font-size:0.75rem;">View only</span>`
       : `<div class="d-flex gap-1">
-          <button class="ab ab-edit" title="Edit customer"              onclick="openEdit(${c.id})"><i class="bi bi-pencil-fill"></i></button>
-          <button class="ab ab-paid" title="Mark as Paid — renews +1 month" onclick="markPaid(${c.id})"><i class="bi bi-check-lg"></i></button>
-          <button class="ab ab-wa"   title="Send WhatsApp reminder"     onclick="sendWA(${c.id})"><i class="bi bi-whatsapp"></i></button>
-          <button class="ab ab-del"  title="Delete customer"            onclick="openDel(${c.id}, '${x(c.name)}')"><i class="bi bi-trash-fill"></i></button>
+          <button class="ab ab-edit" title="Edit customer"              aria-label="Edit ${x(c.name)}"              onclick="openEdit(${c.id})"><i class="bi bi-pencil-fill" aria-hidden="true"></i></button>
+          <button class="ab ab-paid" title="Mark as Paid — renews +1 month" aria-label="Mark ${x(c.name)} as paid" onclick="markPaid(${c.id})"><i class="bi bi-check-lg"     aria-hidden="true"></i></button>
+          <button class="ab ab-wa"   title="Send WhatsApp reminder"     aria-label="WhatsApp ${x(c.name)}"          onclick="sendWA(${c.id})"><i class="bi bi-whatsapp"       aria-hidden="true"></i></button>
+          <button class="ab ab-del"  title="Delete customer"            aria-label="Delete ${x(c.name)}"            onclick="openDel(${c.id}, '${x(c.name)}')"><i class="bi bi-trash-fill" aria-hidden="true"></i></button>
         </div>`;
     return `
     <tr>
@@ -1056,7 +1083,7 @@ function renderTable() {
    ADD / EDIT
 ════════════════════════════════════════════ */
 function openAdd() {
-  document.getElementById('modal-title').textContent = 'Add Customer';
+  document.getElementById('cust-modal-title').textContent = 'Add Customer';
   document.getElementById('cust-form').reset();
   document.getElementById('f-id').value    = '';
   document.getElementById('f-start').value = todayISO();
@@ -1069,7 +1096,7 @@ function openEdit(id) {
   const c = customers.find(r => r.id === id);
   if (!c) return;
 
-  document.getElementById('modal-title').textContent  = 'Edit Customer';
+  document.getElementById('cust-modal-title').textContent  = 'Edit Customer';
   document.getElementById('f-id').value               = c.id;
   document.getElementById('f-name').value             = c.name;
   document.getElementById('f-phone').value            = c.phone;
@@ -1281,7 +1308,8 @@ function toast(msg, type = 'inf') {
   const icons = { ok: '✅', err: '❌', inf: 'ℹ️' };
   const el    = document.createElement('div');
   el.className = `t-toast ${type}`;
-  el.innerHTML = `<span>${icons[type]}</span><span>${msg}</span>`;
+  if (type === 'err') el.setAttribute('role', 'alert');  // interrupts immediately for errors
+  el.innerHTML = `<span aria-hidden="true">${icons[type]}</span><span>${msg}</span>`;
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => el.remove(), 5000);
 }
