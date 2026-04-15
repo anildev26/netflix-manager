@@ -27,6 +27,8 @@ TEST_PASS  = os.environ.get("TEST_PASSWORD", "Test@Admin123")
 # ─── Database ─────────────────────────────────────────────────────────────────
 
 def get_db():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL environment variable is not set")
     conn = psycopg2.connect(DATABASE_URL)
     return conn
 
@@ -395,6 +397,21 @@ def import_customers():
 
     return jsonify({"added": added, "errors": errors})
 
+
+# ─── Global error handlers (always return JSON, never HTML) ──────────────────
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    code = getattr(e, 'code', 500)
+    return jsonify({"error": str(e)}), code
+
+@app.errorhandler(404)
+def handle_404(e):
+    return jsonify({"error": "Not found"}), 404
+
+@app.errorhandler(500)
+def handle_500(e):
+    return jsonify({"error": "Internal server error"}), 500
 
 # ─── Setup endpoint (run once after deploy) ───────────────────────────────────
 

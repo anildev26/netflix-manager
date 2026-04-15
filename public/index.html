@@ -750,8 +750,19 @@ async function api(method, path, body) {
   };
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res  = await fetch(path, opts);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  let data;
+  try {
+    data = await res.json();
+  } catch (_) {
+    const err = new Error(`Server error (${res.status}). Check Vercel logs.`);
+    err.status = res.status;
+    throw err;
+  }
+  if (!res.ok) {
+    const err = new Error(data.error || `Error ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -900,7 +911,7 @@ async function loadCustomers() {
     renderStats();
     renderTable();
   } catch (ex) {
-    if (ex.message.toLowerCase().includes('token') || ex.message.includes('401')) logout();
+    if (ex.status === 401) { logout(); return; }
     toast('Could not load customers: ' + ex.message, 'err');
   }
 }
