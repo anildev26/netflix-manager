@@ -834,6 +834,7 @@
   </div>
 </div>
 
+<script src="/dates.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 /* ════════════════════════════════════════════
@@ -972,7 +973,7 @@ async function importCSV(file) {
     if (hasErrors) {
       html += `<br><span style="opacity:.85">Skipped ${data.errors.length} row(s) with errors:</span>`;
       html += `<ul style="margin:6px 0 0; padding-left:18px;">` +
-              data.errors.map(e => `<li>${e}</li>`).join('') + `</ul>`;
+              data.errors.map(e => `<li>${x(e)}</li>`).join('') + `</ul>`;
     }
 
     banner.innerHTML  = html;
@@ -1193,7 +1194,7 @@ function renderTable() {
           <button class="ab ab-edit" title="Edit customer"              aria-label="Edit ${x(c.name)}"              onclick="openEdit(${c.id})"><i class="bi bi-pencil-fill" aria-hidden="true"></i></button>
           <button class="ab ab-paid" title="Mark as Paid — renews +1 month" aria-label="Mark ${x(c.name)} as paid" onclick="markPaid(${c.id})"><i class="bi bi-check-lg"     aria-hidden="true"></i></button>
           <button class="ab ab-wa"   title="Send WhatsApp reminder"     aria-label="WhatsApp ${x(c.name)}"          onclick="sendWA(${c.id})"><i class="bi bi-whatsapp"       aria-hidden="true"></i></button>
-          <button class="ab ab-del"  title="Delete customer"            aria-label="Delete ${x(c.name)}"            onclick="openDel(${c.id}, '${x(c.name)}')"><i class="bi bi-trash-fill" aria-hidden="true"></i></button>
+          <button class="ab ab-del"  title="Delete customer"            aria-label="Delete ${x(c.name)}"            onclick="openDel(${c.id})"><i class="bi bi-trash-fill" aria-hidden="true"></i></button>
         </div>`;
     return `
     <tr>
@@ -1288,9 +1289,10 @@ async function handleFormSubmit(e) {
 /* ════════════════════════════════════════════
    DELETE
 ════════════════════════════════════════════ */
-function openDel(id, name) {
+function openDel(id) {
+  const c = customers.find(r => r.id === id);
   pendingDelId = id;
-  document.getElementById('del-name').textContent = name;
+  document.getElementById('del-name').textContent = c ? c.name : "this customer";
   delModal.show();
 }
 
@@ -1322,14 +1324,11 @@ function markPaid(id) {
   const c = customers.find(r => r.id === id);
   if (!c) return;
 
-  // Calculate next expiry to show in modal
-  const currentExp = new Date(c.expiry_date);
-  const newExp     = new Date(currentExp);
-  newExp.setMonth(newExp.getMonth() + 1);
+  const newExpISO = NetflixDates.addOneMonthISO(c.expiry_date);
 
   document.getElementById('paid-name').textContent        = c.name;
   document.getElementById('paid-current-exp').textContent = fmtDate(c.expiry_date);
-  document.getElementById('paid-new-exp').textContent     = fmtDate(newExp.toISOString().slice(0, 10));
+  document.getElementById('paid-new-exp').textContent     = newExpISO ? fmtDate(newExpISO) : "–";
 
   pendingPaidId = id;
   paidModal.show();
@@ -1362,28 +1361,13 @@ async function confirmPaid() {
 /* ════════════════════════════════════════════
    WHATSAPP
 ════════════════════════════════════════════ */
-function sendWA(id) {
-  const c = customers.find(r => r.id === id);
-  if (!c) return;
-
-  let timeText;
-  if (c.days_left > 0)     timeText = `expires on *${fmtDate(c.expiry_date)}* (${c.days_left} days remaining)`;
-  else if (c.days_left === 0) timeText = `expires *TODAY* (${fmtDate(c.expiry_date)})`;
-  else                     timeText = `has already expired on *${fmtDate(c.expiry_date)}*`;
-
-  const msg =
-`Hi ${c.name}! 👋
-
-Your Netflix subscription (Profile: *${c.profile_name}* | Account: ${c.account}) ${timeText}.
-
-💰 Monthly amount: *₹${fmt(c.monthly_amount)}*
-
-Please renew to continue uninterrupted Netflix access. 🎬
-
-Thank you!`;
-
-  const phone = c.phone.replace(/\D/g, '');
-  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
+async function sendWA(id) {
+  try {
+    const data = await api('GET', `/api/customers/${id}/whatsapp`);
+    window.open(data.url, '_blank', 'noopener,noreferrer');
+  } catch (ex) {
+    toast(ex.message, 'err');
+  }
 }
 
 /* ════════════════════════════════════════════
@@ -1443,7 +1427,12 @@ function toast(msg, type = 'inf') {
   const el    = document.createElement('div');
   el.className = `t-toast ${type}`;
   if (type === 'err') el.setAttribute('role', 'alert');  // interrupts immediately for errors
-  el.innerHTML = `<span aria-hidden="true">${icons[type]}</span><span>${msg}</span>`;
+  const icon = document.createElement('span');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = icons[type];
+  const text = document.createElement('span');
+  text.textContent = msg;
+  el.append(icon, text);
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => el.remove(), 5000);
 }

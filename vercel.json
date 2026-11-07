@@ -9,13 +9,14 @@
       "src": "api/index.py",
       "use": "@vercel/python",
       "config": {
-        "includeFiles": ["server.py"]
+        "includeFiles": ["server.py", "netflix_manager/**"]
       }
     }
   ],
   "routes": [
     { "src": "/api/(.*)", "dest": "/api/index.py" },
     { "src": "/favicon.svg", "dest": "/public/favicon.svg" },
+    { "src": "/dates.js", "dest": "/public/dates.js" },
     { "src": "/(.*)", "dest": "/public/index.html" }
   ]
 }

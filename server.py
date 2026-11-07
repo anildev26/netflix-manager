@@ -1,186 +1,217 @@
-import csv
-import io
 import os
-import calendar
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 
-import psycopg2
-import psycopg2.extras
-from flask import Flask, jsonify, request, send_from_directory, Response
 import jwt
+import psycopg2
+from flask import Flask, Response, jsonify, request
+from werkzeug.exceptions import HTTPException
 
-# ─── App & config ─────────────────────────────────────────────────────────────
+from netflix_manager.bot import BotContext, handle_update
+from netflix_manager.config import (
+    auth_material,
+    auth_problems,
+    const_eq,
+    cron_authorized,
+    default_country_code,
+    demo_credentials,
+    dry_run_enabled,
+    load_bot_settings,
+    milestone_days,
+    reminder_gate,
+    setup_token,
+    telegram_chat_id,
+    telegram_token,
+)
+from netflix_manager.csvio import export_csv, plan_import
+from netflix_manager.dates import add_one_month, compute_customer, today_ist
+from netflix_manager.messages import InvalidTemplate, message_template as load_template, renewal_link
+from netflix_manager.repos import PgRepos, SchemaNotReady
+from netflix_manager.reminders import run_reminders
+from netflix_manager.schema import customers_ddl
+from netflix_manager.telegram_api import TelegramError, fetch_file, send_message
 
 _base_dir = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, static_folder=os.path.join(_base_dir, "public"))
+app.config["PROPAGATE_EXCEPTIONS"] = False
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
-JWT_SECRET   = os.environ.get("JWT_SECRET", "change-this-secret-in-production-32chars+")
-
-ADMIN_USER = os.environ.get("ADMIN_USERNAME", "admin")
-ADMIN_PASS = os.environ.get("ADMIN_PASSWORD", "admin123")
-
-TEST_USER  = os.environ.get("TEST_USERNAME", "test")
-TEST_PASS  = os.environ.get("TEST_PASSWORD", "Test@Admin123")
-
-# ─── Database ─────────────────────────────────────────────────────────────────
 
 def get_db():
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL environment variable is not set")
-    conn = psycopg2.connect(DATABASE_URL)
-    return conn
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url or url == "memory":
+        raise RuntimeError("database is not configured")
+    return psycopg2.connect(url)
 
 
-def get_cursor(conn):
-    return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+def get_repos():
+    factory = app.config.get("REPOS_FACTORY")
+    if factory:
+        return factory()
+    return PgRepos(get_db())
 
 
 def init_db():
+    """Create the customers table only. Never called by ordinary requests."""
     conn = get_db()
-    cur  = get_cursor(conn)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS customers (
-            id              SERIAL PRIMARY KEY,
-            name            TEXT   NOT NULL,
-            phone           TEXT   NOT NULL,
-            account         TEXT   NOT NULL,
-            profile_name    TEXT   NOT NULL,
-            monthly_amount  REAL   NOT NULL DEFAULT 0,
-            start_date      TEXT   NOT NULL,
-            payment_status  TEXT   NOT NULL DEFAULT 'Payment pending',
-            created_at      TEXT   NOT NULL DEFAULT TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')
-        )
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(customers_ddl())
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
 
-# ─── Business logic ───────────────────────────────────────────────────────────
-
-def add_one_month(d: date) -> date:
-    """Add exactly one calendar month, clamping to month end if needed."""
-    month = d.month + 1
-    year  = d.year
-    if month > 12:
-        month = 1
-        year += 1
-    day = min(d.day, calendar.monthrange(year, month)[1])
-    return date(year, month, day)
-
-
-def compute_customer(row) -> dict:
-    """Attach computed fields (expiry, days_left, status) to a DB row dict."""
-    c      = dict(row)
-    start  = date.fromisoformat(c["start_date"])
-    expiry = add_one_month(start)
-    today  = date.today()
-    days   = (expiry - today).days
-
-    c["expiry_date"] = expiry.isoformat()
-    c["days_left"]   = days
-
-    if days < 0:
-        c["status"] = "Expired"
-    elif days == 0:
-        c["status"] = "Expires today"
-    elif days <= 2:
-        c["status"] = "Expiring soon"
-    else:
-        c["status"] = "Active"
-
-    return c
-
-# ─── Auth helpers ─────────────────────────────────────────────────────────────
 
 def _decode_token():
-    auth  = request.headers.get("Authorization", "")
-    token = auth.replace("Bearer ", "").strip()
+    material = auth_material()
+    if not material:
+        return None
+    header = request.headers.get("Authorization", "")
+    token = header.replace("Bearer ", "", 1).strip()
     if not token:
         return None
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-    except jwt.ExpiredSignatureError:
-        return None
+        return jwt.decode(token, material[2], algorithms=["HS256"])
     except jwt.InvalidTokenError:
         return None
 
 
-def token_required(f):
-    @wraps(f)
+def _unauthorized():
+    header = request.headers.get("Authorization", "")
+    token = header.replace("Bearer ", "", 1).strip()
+    if not token:
+        return jsonify({"error": "Authorization token required"}), 401
+    material = auth_material()
+    if not material:
+        return jsonify({"error": "Authentication is not configured"}), 503
+    try:
+        jwt.decode(token, material[2], algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        return jsonify({"error": "Session expired — please log in again"}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({"error": "Invalid token"}), 401
+    return jsonify({"error": "Invalid token"}), 401
+
+
+def token_required(func):
+    @wraps(func)
     def decorated(*args, **kwargs):
+        if auth_problems():
+            return jsonify({"error": "Authentication is not configured"}), 503
         payload = _decode_token()
         if payload is None:
-            auth  = request.headers.get("Authorization", "")
-            token = auth.replace("Bearer ", "").strip()
-            if not token:
-                return jsonify({"error": "Authorization token required"}), 401
-            try:
-                jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-            except jwt.ExpiredSignatureError:
-                return jsonify({"error": "Session expired — please log in again"}), 401
-            except jwt.InvalidTokenError:
-                return jsonify({"error": "Invalid token"}), 401
-        return f(*args, **kwargs)
+            return _unauthorized()
+        return func(*args, **kwargs)
     return decorated
 
 
-def admin_required(f):
-    @wraps(f)
+def admin_required(func):
+    @wraps(func)
     def decorated(*args, **kwargs):
+        if auth_problems():
+            return jsonify({"error": "Authentication is not configured"}), 503
         payload = _decode_token()
         if payload is None:
-            return jsonify({"error": "Authorization required"}), 401
+            return _unauthorized()
         if payload.get("role") != "admin":
             return jsonify({"error": "Admin access required"}), 403
-        return f(*args, **kwargs)
+        return func(*args, **kwargs)
     return decorated
 
-# ─── Auth routes ──────────────────────────────────────────────────────────────
+
+def _role():
+    payload = _decode_token() or {}
+    role = payload.get("role")
+    if role in {"admin", "test"}:
+        return role
+    return None
+
+
+def demo_rows(today: date):
+    start = (today - timedelta(days=3)).isoformat()
+    return [{
+        "id": 1,
+        "name": "Demo Customer",
+        "phone": "910000000000",
+        "account": "Demo Account",
+        "profile_name": "Demo Profile",
+        "monthly_amount": 0,
+        "start_date": start,
+        "payment_status": "Payment pending",
+        "created_at": today.isoformat(),
+    }]
+
+
+def _mask_demo(rows):
+    masked = []
+    for row in rows:
+        row["phone"] = "●●●●●●●●●●"
+        row["monthly_amount"] = "●●●●"
+        masked.append(row)
+    return masked
+
+
+def _customer_fields(data):
+    return {
+        "name": data["name"].strip(),
+        "phone": data["phone"].strip(),
+        "account": data["account"].strip(),
+        "profile_name": data["profile_name"].strip(),
+        "monthly_amount": float(data["monthly_amount"]),
+        "start_date": data["start_date"],
+        "payment_status": data.get("payment_status", "Payment pending"),
+    }
+
+
+def _no_store(payload, status=200):
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response, status
+
 
 @app.route("/api/login", methods=["POST"])
 def login():
+    material = auth_material()
+    if not material:
+        return jsonify({"error": "Authentication is not configured"}), 503
     data = request.get_json(silent=True) or {}
-    u    = data.get("username", "")
-    p    = data.get("password", "")
-
-    if u == ADMIN_USER and p == ADMIN_PASS:
+    username = data.get("username", "")
+    password = data.get("password", "")
+    admin_user, admin_password, secret = material
+    if const_eq(username, admin_user) and const_eq(password, admin_password):
         role = "admin"
-    elif u == TEST_USER and p == TEST_PASS:
-        role = "test"
+        subject = username
     else:
-        return jsonify({"error": "Invalid username or password"}), 401
-
+        demo = demo_credentials()
+        if not demo or not (const_eq(username, demo[0]) and const_eq(password, demo[1])):
+            return jsonify({"error": "Invalid username or password"}), 401
+        role = "test"
+        subject = username
     token = jwt.encode(
-        {"sub": u, "role": role, "exp": datetime.utcnow() + timedelta(days=7)},
-        JWT_SECRET,
+        {"sub": subject, "role": role, "exp": datetime.now(timezone.utc) + timedelta(days=7)},
+        secret,
         algorithm="HS256",
     )
     return jsonify({"token": token, "role": role})
 
-# ─── Customer routes ──────────────────────────────────────────────────────────
 
 @app.route("/api/customers", methods=["GET"])
 @token_required
 def get_customers():
-    payload = _decode_token()
-    role    = payload.get("role", "admin") if payload else "admin"
-
-    conn = get_db()
-    cur  = get_cursor(conn)
-    cur.execute("SELECT * FROM customers ORDER BY id")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    result = [compute_customer(r) for r in rows]
-
+    role = _role()
     if role == "test":
-        for c in result:
-            c["phone"]          = "●●●●●●●●●●"
-            c["monthly_amount"] = "●●●●"
-
+        rows = demo_rows(date.today())
+    elif role == "admin":
+        repos = get_repos()
+        try:
+            rows = repos.customers.list_all()
+        finally:
+            repos.close()
+    else:
+        return jsonify({"error": "Invalid token"}), 401
+    result = [compute_customer(row) for row in rows]
+    if role == "test":
+        result = _mask_demo(result)
     return jsonify(result)
 
 
@@ -192,31 +223,12 @@ def add_customer():
     for field in required:
         if field not in data or (data[field] == "" and field != "monthly_amount"):
             return jsonify({"error": f"Missing required field: {field}"}), 400
-
-    conn = get_db()
-    cur  = get_cursor(conn)
-    cur.execute(
-        """INSERT INTO customers
-               (name, phone, account, profile_name, monthly_amount, start_date, payment_status)
-           VALUES (%s, %s, %s, %s, %s, %s, %s)
-           RETURNING id""",
-        (
-            data["name"].strip(),
-            data["phone"].strip(),
-            data["account"].strip(),
-            data["profile_name"].strip(),
-            float(data["monthly_amount"]),
-            data["start_date"],
-            data.get("payment_status", "Payment pending"),
-        ),
-    )
-    new_id = cur.fetchone()["id"]
-    conn.commit()
-
-    cur.execute("SELECT * FROM customers WHERE id = %s", (new_id,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    repos = get_repos()
+    try:
+        row = repos.customers.insert(_customer_fields(data))
+        repos.commit()
+    finally:
+        repos.close()
     return jsonify(compute_customer(row)), 201
 
 
@@ -224,31 +236,12 @@ def add_customer():
 @admin_required
 def update_customer(cid):
     data = request.get_json(silent=True) or {}
-    conn = get_db()
-    cur  = get_cursor(conn)
-    cur.execute(
-        """UPDATE customers
-           SET name=%s, phone=%s, account=%s, profile_name=%s,
-               monthly_amount=%s, start_date=%s, payment_status=%s
-           WHERE id=%s""",
-        (
-            data["name"].strip(),
-            data["phone"].strip(),
-            data["account"].strip(),
-            data["profile_name"].strip(),
-            float(data["monthly_amount"]),
-            data["start_date"],
-            data.get("payment_status", "Payment pending"),
-            cid,
-        ),
-    )
-    conn.commit()
-
-    cur.execute("SELECT * FROM customers WHERE id = %s", (cid,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-
+    repos = get_repos()
+    try:
+        row = repos.customers.update(cid, _customer_fields(data))
+        repos.commit()
+    finally:
+        repos.close()
     if not row:
         return jsonify({"error": "Customer not found"}), 404
     return jsonify(compute_customer(row))
@@ -257,67 +250,64 @@ def update_customer(cid):
 @app.route("/api/customers/<int:cid>", methods=["DELETE"])
 @admin_required
 def delete_customer(cid):
-    conn = get_db()
-    cur  = get_cursor(conn)
-    cur.execute("DELETE FROM customers WHERE id = %s", (cid,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    repos = get_repos()
+    try:
+        repos.customers.delete(cid)
+        repos.commit()
+    finally:
+        repos.close()
     return jsonify({"success": True})
 
 
 @app.route("/api/customers/<int:cid>/paid", methods=["POST"])
 @admin_required
 def mark_paid(cid):
-    conn = get_db()
-    cur  = get_cursor(conn)
+    repos = get_repos()
+    try:
+        row = repos.customers.get(cid)
+        if not row:
+            return jsonify({"error": "Customer not found"}), 404
+        new_start = add_one_month(date.fromisoformat(row["start_date"]))
+        updated = repos.customers.set_cycle(cid, new_start.isoformat(), "Paid")
+        repos.commit()
+    finally:
+        repos.close()
+    return jsonify(compute_customer(updated))
 
-    cur.execute("SELECT * FROM customers WHERE id = %s", (cid,))
-    row = cur.fetchone()
+
+@app.route("/api/customers/<int:cid>/whatsapp", methods=["GET"])
+@admin_required
+def customer_whatsapp(cid):
+    country = default_country_code()
+    repos = get_repos()
+    try:
+        row = repos.customers.get(cid)
+    finally:
+        repos.close()
     if not row:
-        cur.close()
-        conn.close()
         return jsonify({"error": "Customer not found"}), 404
-
-    new_start = add_one_month(date.fromisoformat(row["start_date"]))
-    cur.execute(
-        "UPDATE customers SET start_date=%s, payment_status=%s WHERE id=%s",
-        (new_start.isoformat(), "Paid", cid),
-    )
-    conn.commit()
-
-    cur.execute("SELECT * FROM customers WHERE id = %s", (cid,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return jsonify(compute_customer(row))
-
-# ─── Import / Export ──────────────────────────────────────────────────────────
-
-CSV_HEADERS = ["Name", "Phone", "Account", "Profile Name", "Monthly Amount", "Start Date", "Payment Status"]
-CSV_FIELDS  = ["name", "phone", "account", "profile_name", "monthly_amount", "start_date", "payment_status"]
+    try:
+        view = compute_customer(row)
+        template = load_template()
+    except InvalidTemplate:
+        return jsonify({"error": "Reminder template is invalid"}), 500
+    message, url = renewal_link(view, country, template)
+    if not url:
+        return jsonify({"error": "This phone number needs a valid country code before a WhatsApp link can be created."}), 422
+    return jsonify({"url": url, "message": message})
 
 
 @app.route("/api/customers/export", methods=["GET"])
 @admin_required
 def export_customers():
-    conn = get_db()
-    cur  = get_cursor(conn)
-    cur.execute("SELECT * FROM customers ORDER BY id")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(CSV_HEADERS)
-    for r in rows:
-        writer.writerow([r["name"], r["phone"], r["account"], r["profile_name"],
-                         r["monthly_amount"], r["start_date"], r["payment_status"]])
-
+    repos = get_repos()
+    try:
+        rows = repos.customers.list_all()
+    finally:
+        repos.close()
     today = date.today().isoformat()
     return Response(
-        buf.getvalue(),
+        export_csv(rows),
         mimetype="text/csv",
         headers={"Content-Disposition": f"attachment; filename=netflix_customers_{today}.csv"},
     )
@@ -326,122 +316,180 @@ def export_customers():
 @app.route("/api/customers/import", methods=["POST"])
 @admin_required
 def import_customers():
-    file = request.files.get("file")
-    if not file:
+    upload = request.files.get("file")
+    if not upload:
         return jsonify({"error": "No file provided"}), 400
-
+    raw = upload.read(200_001)
+    if len(raw) > 200_000:
+        return jsonify({"error": "File is too large"}), 400
     try:
-        content = file.read().decode("utf-8-sig")
-        reader  = csv.DictReader(io.StringIO(content))
-    except Exception as e:
-        return jsonify({"error": f"Could not read file: {e}"}), 400
-
-    added  = 0
-    errors = []
-
-    conn = get_db()
-    cur  = get_cursor(conn)
+        content = raw.decode("utf-8-sig")
+    except UnicodeError:
+        return jsonify({"error": "Could not read file"}), 400
+    country = default_country_code()
+    if country is None:
+        return jsonify({"error": "Phone country code is not configured"}), 500
+    repos = get_repos()
     try:
-        for row_num, raw in enumerate(reader, start=2):
-            row = {k.strip().lower(): v.strip() for k, v in raw.items() if k}
-
-            def get(*keys):
-                for k in keys:
-                    if k.lower() in row and row[k.lower()]:
-                        return row[k.lower()]
-                return ""
-
-            name           = get("name")
-            phone          = get("phone", "whatsapp")
-            account        = get("account", "netflix account")
-            profile_name   = get("profile name", "profile_name", "profile")
-            amount_raw     = get("monthly amount", "monthly_amount", "amount") or "0"
-            start_date_raw = get("start date", "start_date")
-            payment_status = get("payment status", "payment_status") or "Payment pending"
-
-            row_errors = []
-            if not name:           row_errors.append("Name is required")
-            if not phone:          row_errors.append("Phone is required")
-            if not account:        row_errors.append("Account is required")
-            if not profile_name:   row_errors.append("Profile Name is required")
-            if not start_date_raw: row_errors.append("Start Date is required")
-
-            try:
-                amount = float(amount_raw)
-            except ValueError:
-                row_errors.append(f"Invalid amount '{amount_raw}'")
-                amount = 0.0
-
-            if start_date_raw:
-                try:
-                    date.fromisoformat(start_date_raw)
-                except ValueError:
-                    row_errors.append(f"Invalid date '{start_date_raw}' — use YYYY-MM-DD")
-
-            if row_errors:
-                errors.append(f"Row {row_num}: {'; '.join(row_errors)}")
-                continue
-
-            cur.execute(
-                """INSERT INTO customers
-                       (name, phone, account, profile_name, monthly_amount, start_date, payment_status)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                (name, phone, account, profile_name, amount, start_date_raw, payment_status),
-            )
-            added += 1
-
-        conn.commit()
+        plan = plan_import(content, repos.customers.list_all(), country)
+        for fields in plan.rows:
+            repos.customers.insert(fields)
+        repos.commit()
     finally:
-        cur.close()
-        conn.close()
-
-    return jsonify({"added": added, "errors": errors})
+        repos.close()
+    return jsonify({"added": len(plan.rows), "errors": plan.errors, "duplicates": plan.duplicates})
 
 
-# ─── Global error handlers (always return JSON, never HTML) ──────────────────
+@app.route("/api/cron/reminders", methods=["GET", "POST"])
+def cron_reminders():
+    if not cron_authorized(request.headers.get("Authorization", "")):
+        return _no_store({"error": "Unauthorized"}, 401)
+    gate = reminder_gate()
+    if gate == "disabled":
+        return _no_store({
+            "ok": True,
+            "enabled": False,
+            "dry_run": True,
+            "sent": 0,
+            "reason": "telegram_not_configured",
+        })
+    if gate == "bad_destination":
+        return _no_store({"error": "Telegram destination must be the owner's private chat id"}, 500)
+    milestones = milestone_days()
+    if not milestones:
+        return _no_store({"error": "Reminder milestones are invalid"}, 500)
+    try:
+        template = load_template()
+    except InvalidTemplate:
+        return _no_store({"error": "Reminder template is invalid"}, 500)
+    country = default_country_code()
+    token = telegram_token()
+    chat_id = telegram_chat_id()
+    repos = get_repos()
+    try:
+        rows = repos.customers.list_all()
+        def send(text, chat_id=chat_id, token=token):
+            send_message(token, chat_id, text)
+        result = run_reminders(
+            rows=rows,
+            today=today_ist(),
+            milestones=milestones,
+            template=template,
+            country_code=country,
+            dry_run=dry_run_enabled(),
+            store=repos.deliveries,
+            send=send,
+            now=datetime.now(timezone.utc),
+            commit=repos.commit,
+        )
+        return _no_store(result)
+    except SchemaNotReady:
+        return _no_store({"error": "Reminder storage is not initialized"}, 503)
+    finally:
+        repos.close()
 
-@app.errorhandler(Exception)
-def handle_exception(e):
-    code = getattr(e, 'code', 500)
-    return jsonify({"error": str(e)}), code
 
-@app.errorhandler(404)
-def handle_404(e):
-    return jsonify({"error": "Not found"}), 404
+@app.route("/api/telegram/webhook", methods=["POST"])
+def telegram_webhook():
+    settings = load_bot_settings()
+    if not settings.enabled:
+        return "", 404
+    presented = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not const_eq(presented, settings.webhook_secret or ""):
+        return "", 401
+    raw = request.get_data(cache=True) or b""
+    if len(raw) > 100_000:
+        return "", 413
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return "", 400
+    repos = get_repos()
+    try:
+        def fetcher(file_id, token=settings.token):
+            return fetch_file(token, file_id)
+        ctx = BotContext(
+            settings=settings,
+            repos=repos,
+            outbox=_BotOutbox(settings),
+            now=datetime.now(timezone.utc),
+            country_code=default_country_code() or "",
+            fetcher=fetcher,
+        )
+        handle_update(payload, ctx)
+        return jsonify({"ok": True})
+    except SchemaNotReady:
+        return jsonify({"error": "Bot storage is not initialized"}), 503
+    finally:
+        repos.close()
 
-@app.errorhandler(500)
-def handle_500(e):
-    return jsonify({"error": "Internal server error"}), 500
 
-# ─── Setup endpoint (run once after deploy) ───────────────────────────────────
+class _BotOutbox:
+    """Sends only to allowlisted private chats. The request cannot choose another chat."""
+
+    def __init__(self, settings):
+        self.settings = settings
+
+    def send_message(self, chat_id, text, buttons=None):
+        if chat_id not in self.settings.owner_ids:
+            raise TelegramError("refusing destination")
+        send_message(self.settings.token, chat_id, text, buttons)
+
+    def send_document(self, chat_id, filename, data):
+        if chat_id not in self.settings.owner_ids:
+            raise TelegramError("refusing destination")
+        from netflix_manager.telegram_api import send_document
+        send_document(self.settings.token, chat_id, filename, data)
+
+    def answer(self, callback_id, text):
+        from netflix_manager.telegram_api import answer_callback
+        answer_callback(self.settings.token, callback_id, text)
+
 
 @app.route("/api/setup", methods=["POST"])
 def setup():
-    """Create tables. Call once after first deploy."""
-    secret = request.headers.get("X-Setup-Secret", "")
-    if secret != JWT_SECRET:
-        return jsonify({"error": "Forbidden"}), 403
+    token = setup_token()
+    if not token:
+        return jsonify({"error": "Not found"}), 404
+    presented = request.headers.get("X-Setup-Token", "")
+    if not const_eq(presented, token):
+        return jsonify({"error": "Unauthorized"}), 401
     init_db()
     return jsonify({"ok": True})
 
 
-# ─── Serve frontend ────────────────────────────────────────────────────────────
+@app.errorhandler(Exception)
+def handle_exception(exc):
+    if isinstance(exc, HTTPException):
+        if exc.code and exc.code >= 500:
+            return jsonify({"error": "Internal server error"}), exc.code
+        return jsonify({"error": exc.description or "Error"}), exc.code
+    app.logger.error("request failed (%s)", type(exc).__name__)
+    return jsonify({"error": "Internal server error"}), 500
+
+
+@app.errorhandler(404)
+def handle_404(_exc):
+    return jsonify({"error": "Not found"}), 404
+
 
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve(path):
-    public = os.path.join(_base_dir, "public")
-    if path and os.path.exists(os.path.join(public, path)):
-        return send_from_directory(public, path)
+    from flask import send_from_directory
+    public = os.path.realpath(os.path.join(_base_dir, "public"))
+    if path:
+        target = os.path.realpath(os.path.join(public, path))
+        if target.startswith(public + os.sep) and os.path.isfile(target):
+            return send_from_directory(public, os.path.relpath(target, public))
     return send_from_directory(public, "index.html")
 
-# ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    if auth_problems():
+        print("Authentication is not configured. Refusing to start.")
+        raise SystemExit(1)
     init_db()
-    port  = int(os.environ.get("PORT", 3000))
+    port = int(os.environ.get("PORT", "3000"))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    print(f"\n  Netflix Manager running at http://localhost:{port}")
-    print(f"  Admin : {ADMIN_USER}")
-    print(f"  Test  : {TEST_USER}\n")
+    print(f"Netflix Manager running at http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=debug)
