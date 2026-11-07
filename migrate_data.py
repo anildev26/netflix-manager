@@ -1,20 +1,20 @@
 """
-Data migration: CSV export → Supabase PostgreSQL
+DEPRECATED. Do not use this for the Supabase to Neon move.
 
-Usage:
-  1. pip install psycopg2-binary
-  2. Set DATABASE_URL to your Supabase connection string:
-       Windows:  set DATABASE_URL=postgresql://postgres:PASSWORD@db.XXXX.supabase.co:5432/postgres
-       Mac/Linux: export DATABASE_URL=postgresql://postgres:PASSWORD@db.XXXX.supabase.co:5432/postgres
-  3. python migrate_data.py
+It inserts every CSV row again, which creates duplicates.
+Use scripts/transfer_db.py and docs/RUNBOOK.md instead.
 
-Get your Supabase connection string:
-  Supabase dashboard → Project Settings → Database → Connection string → URI (Session mode, port 5432)
+The script now refuses to run unless RUN_LEGACY_CSV_IMPORT=1 is set, and even
+then it prints only a count.
 """
-
-import csv
 import os
 import sys
+
+if os.environ.get("RUN_LEGACY_CSV_IMPORT") != "1":
+    print("Refusing to run migrate_data.py. Use scripts/transfer_db.py.")
+    sys.exit(2)
+
+import csv
 import psycopg2
 
 CSV_PATH     = os.environ.get("CSV_PATH", r"C:\Users\ANIL\Downloads\netflix_customers_2026-03-16 (1).csv")
@@ -78,6 +78,4 @@ conn.commit()
 cur.close()
 conn.close()
 
-print(f"\nDone! Migrated {inserted} customers to Supabase.")
-for r in rows:
-    print(f"  ✓ {r['Name']} — {r['Account']} / {r['Profile Name']}")
+print(f"\nDone. Migrated {inserted} customers.")
