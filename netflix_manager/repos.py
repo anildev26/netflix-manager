@@ -7,7 +7,9 @@ Neither implementation runs schema DDL.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+
+from netflix_manager.dates import today_ist
 
 import psycopg2.extras
 
@@ -84,7 +86,7 @@ class MemoryCustomers:
         row = {key: fields[key] for key in CUSTOMER_FIELDS}
         row["id"] = cid
         row["monthly_amount"] = float(fields["monthly_amount"])
-        row["created_at"] = date.today().isoformat()
+        row["created_at"] = today_ist().isoformat()
         self.rows[cid] = row
         return _copy_row(row)
 
@@ -287,10 +289,10 @@ class PgCustomers(_Pg):
     def insert(self, fields):
         return self._run(
             """INSERT INTO customers
-                   (name, phone, account, profile_name, monthly_amount, start_date, payment_status)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)
+                   (name, phone, account, profile_name, monthly_amount, start_date, payment_status, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING *""",
-            tuple(fields[key] for key in CUSTOMER_FIELDS),
+            tuple(fields[key] for key in CUSTOMER_FIELDS) + (today_ist().isoformat(),),
             fetch="one",
         )
 

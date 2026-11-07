@@ -190,7 +190,7 @@ CSV export prefixes cells that start with `=`, `+`, `-`, `@`, or a tab so a spre
 
 ## Clock
 
-Reminders and the bot use Asia/Kolkata. The website still uses the server's local date, which is UTC on Vercel. Between 00:00 and 05:30 IST the badge and a bot list can disagree by one day. The 09:00 reminder window is on the same India date as UTC. Renewal math does not use "today" at all.
+The website, API, bot, and reminders share one business date: Asia/Kolkata. Status, days left, the add-customer default start date, `created_at` written by the app, and the CSV download name all use that date. Renewal still adds one clamped calendar month to the stored start date and does not restart from today. Date-only values are formatted from the `YYYY-MM-DD` text. The browser does not parse them with `Date` or `toISOString()`, which would move the day between 00:00 and 05:30 IST. An existing database's column default is not rewritten by these files; the application sends the India date itself.
 
 ## Monitoring
 

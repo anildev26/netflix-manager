@@ -6,7 +6,7 @@ Nothing in this repository turns itself on. Reminders, the Telegram webhook, and
 
 ## What is implemented
 
-- Website login, customer add/edit/delete, mark-paid renewal, search, filters, and CSV import/export.
+- Website login, customer add/edit/delete, mark-paid renewal, search, filters, and CSV import/export. Status and new dates use Asia/Kolkata, the same clock as the bot and reminders.
 - Owner-only Telegram commands for those same actions, with confirmation buttons.
 - Daily reminder code for 2 days before expiry and the expiry day, India time, with a WhatsApp draft link. It does not send WhatsApp messages.
 - Scripts to back up, restore, validate, and copy post-cutover changes between Postgres databases.

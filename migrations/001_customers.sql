@@ -8,5 +8,5 @@ CREATE TABLE IF NOT EXISTS customers (
     monthly_amount  REAL   NOT NULL DEFAULT 0,
     start_date      TEXT   NOT NULL,
     payment_status  TEXT   NOT NULL DEFAULT 'Payment pending',
-    created_at      TEXT   NOT NULL DEFAULT TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')
+    created_at      TEXT   NOT NULL DEFAULT TO_CHAR((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date, 'YYYY-MM-DD')
 );

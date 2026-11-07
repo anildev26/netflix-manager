@@ -59,6 +59,6 @@ Do not put either URL on the command line. The tool prints `host:port/database` 
 
 ## Schema the operator applies by hand
 
-`migrations/001_customers.sql` is the existing table. `002_reminder_deliveries.sql` and `003_telegram.sql` are new. All three are `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`. They do not drop, update, or delete rows. Ordinary website requests do not run them.
+`migrations/001_customers.sql` is the existing table. On a new database its `created_at` default is the Asia/Kolkata date. The application also writes that date on insert, so an older database whose default is still the server date does not need an alter for new rows. `002_reminder_deliveries.sql` and `003_telegram.sql` are new. All three are `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`. They do not drop, update, or delete rows. Ordinary website requests do not run them. Status and days left use Asia/Kolkata in the website, API, bot, and reminders.
 
 Reminder rows are unique on customer id + expiry date + milestone (`days:2`, `days:0`). A failed send can be retried the same day. A successful send is not repeated for that expiry. The next cycle has a new expiry, so it can remind again. The claim stays `sending` for 10 minutes so two overlapping runs do not both send.

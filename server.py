@@ -200,7 +200,7 @@ def login():
 def get_customers():
     role = _role()
     if role == "test":
-        rows = demo_rows(date.today())
+        rows = demo_rows(today_ist())
     elif role == "admin":
         repos = get_repos()
         try:
@@ -305,7 +305,7 @@ def export_customers():
         rows = repos.customers.list_all()
     finally:
         repos.close()
-    today = date.today().isoformat()
+    today = today_ist().isoformat()
     return Response(
         export_csv(rows),
         mimetype="text/csv",

@@ -917,7 +917,7 @@ async function exportCSV() {
     const blob  = await res.blob();
     const url   = URL.createObjectURL(blob);
     const a     = document.createElement('a');
-    const today = new Date().toISOString().slice(0, 10);
+    const today = NetflixDates.businessTodayISO();
     a.href     = url;
     a.download = `netflix_customers_${today}.csv`;
     document.body.appendChild(a);
@@ -1383,9 +1383,7 @@ function x(s) {
 }
 
 function fmtDate(iso) {
-  if (!iso) return '–';
-  const d = new Date(iso + 'T00:00:00');
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  return NetflixDates.formatCalendarDate(iso) || '–';
 }
 
 function fmt(n) {
@@ -1393,7 +1391,7 @@ function fmt(n) {
 }
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return NetflixDates.businessTodayISO();
 }
 
 function daysLabel(n) {
